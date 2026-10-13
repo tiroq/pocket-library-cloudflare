@@ -1,14 +1,27 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pocket-library",
-  "main": "src/index.js",
-  "compatibility_date": "2026-10-13",
-  "workers_dev": false,
-  "routes": [
-    { "pattern": "books.tiroq.dev", "custom_domain": true }
-  ],
-  "r2_buckets": [
-    { "binding": "BOOKS_BUCKET", "bucket_name": "pocket-library-private" }
-  ],
-  "vars": { "READ_USER": "reader" }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pocket-library",
+	"main": "src/index.js",
+	"compatibility_date": "2026-10-13",
+	"workers_dev": false,
+	"routes": [
+		{
+			"pattern": "books.tiroq.dev",
+			"custom_domain": true
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BOOKS_BUCKET",
+			"bucket_name": "pocket-library-private"
+		},
+		{
+			"bucket_name": "pocket-library-private",
+			"binding": "pocket_library_private",
+			"remote": true
+		}
+	],
+	"vars": {
+		"READ_USER": "reader"
+	}
 }
