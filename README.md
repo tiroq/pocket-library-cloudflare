@@ -1,0 +1,127 @@
+# Pocket Library — private OPDS for XTEINK X3
+
+A small **Cloudflare-only runtime**: Worker + private R2 bucket + custom domain `books.tiroq.dev`.
+
+- **Import** EPUB from iPhone Share Sheet → Shortcuts → HTTPS POST.
+- **Extract** title, author, language and (optional) cover from EPUB in the Worker.
+- **Catalog** served dynamically as OPDS 1 (Atom) at `/opds.xml`; no separate cron or build is needed for added books.
+- **Download** EPUB directly from `/books/<sha256>.epub` with HTTP Basic authorization (CrossPoint OPDS-compatible).
+- **Deduplicate** byte-identical EPUB uploads by SHA-256.
+- **Storage privacy**: R2 bucket must remain private; no public `r2.dev` or R2 custom domain.
+
+> This package is code ready for deployment, **not** an already deployed Cloudflare service. The code was locally tested with Node; final Cloudflare runtime and XTEINK integration require account/device verification.
+
+## Installation (Mac, Node.js 22+)
+
+1. Open Cloudflare dashboard. Enable R2 object storage if it is not yet enabled. Verify your domain `tiroq.dev` belongs to the same account.
+2. Unzip project and in Terminal:
+
+   ```bash
+   cd pocket-library-cloudflare
+   npm install
+   npx wrangler login
+   npx wrangler r2 bucket create pocket-library-private
+   ```
+
+   **Existing bucket?** If it already exists, do not recreate it; check `npx wrangler r2 bucket list`. Do not enable public access.
+
+3. Create **two different** high-entropy secrets, e.g. with `openssl rand -hex 32` run twice. Never paste either secret into chat or your repository.
+
+   ```bash
+   npx wrangler secret put READ_PASSWORD
+   npx wrangler secret put UPLOAD_TOKEN
+   ```
+
+   On the first deployment, some Wrangler versions expect the Worker to exist before `secret put`. If you get a deployment/configuration error, run `npx wrangler deploy` first, immediately put both secrets, then test. Before the secrets exist the Worker refuses to serve library data (HTTP 503).
+
+4. Deploy:
+
+   ```bash
+   npm test
+   npx wrangler deploy
+   ```
+
+   The `routes` configuration uses `custom_domain: true` for `books.tiroq.dev`. Cloudflare manages the corresponding DNS record and HTTPS certificate automatically. If an **existing** DNS record already uses `books`, resolve the conflict carefully; do not blindly delete unrelated records. `workers_dev: false` prevents an extra workers.dev hostname.
+
+5. Test as described below, then configure CrossPoint and the iPhone Shortcut.
+
+### Authentication
+
+**Read-only OPDS user:** `reader` (config `vars.READ_USER`) + `READ_PASSWORD` Worker secret. The same password is used for catalog and EPUB requests.
+
+**Upload key:** `UPLOAD_TOKEN` Worker secret, sent as `Authorization: Bearer ...` by the iPhone Shortcut. This secret can also delete books, so **do not share the Shortcut**. It is different from the read password.
+
+Cloudflare Access login is *not* enabled on these paths: CrossPoint does not support its interactive browser login. Basic Auth is transported via HTTPS. **Important:** current CrossPoint HTTPS downloader uses `setInsecure()`, so the X3 does not verify TLS certificate authenticity. Use a strong **read-only password unique to this library**, not a password used anywhere else.
+
+## Test
+
+The first unauthenticated test should return `401`:
+
+```bash
+curl -i https://books.tiroq.dev/opds.xml
+```
+
+Authorized OPDS:
+
+```bash
+curl -u reader https://books.tiroq.dev/opds.xml
+# curl will ask for the reader password interactively
+```
+
+Use **a freely distributable, DRM-free EPUB you own** for the import test:
+
+```bash
+read -rsp 'Upload token: ' UPLOAD_TOKEN; echo
+curl -i --fail-with-body -X POST 'https://books.tiroq.dev/api/books' \
+  -H "Authorization: Bearer $UPLOAD_TOKEN" \
+  -H 'Content-Type: application/epub+zip' \
+  --data-binary '@test-book.epub'
+unset UPLOAD_TOKEN
+```
+
+Expected `201` JSON containing `id`, `title`, `author`. Re-uploading the exact same file gives `200` and `duplicate:true`. Re-open `/opds.xml` and the book appears immediately.
+
+**Delete** by ID, guarded by upload token:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
+  "https://books.tiroq.dev/api/books/<64-character-id>"
+```
+
+## CrossPoint X3
+
+`Settings → System → OPDS Servers → Add Server`
+
+| Setting | Value |
+|---|---|
+| Name | Pocket Library |
+| Server URL | `https://books.tiroq.dev/opds.xml` |
+| Username | `reader` |
+| Password | your `READ_PASSWORD` |
+
+Connect X3 to iPhone Wi-Fi hotspot. Browse OPDS and download a sample EPUB. **Device integration check:** CrossPoint upstream forwards the configured Basic username/password to its EPUB downloader. If your X3 still fails, check the specific firmware version and HTTPS network logs. Never solve this by publishing the bucket or putting reusable access tokens in EPUB URLs.
+
+## iPhone (Shortcuts Share Sheet)
+
+Follow [docs/iphone-shortcut.md](docs/iphone-shortcut.md). The shortcut sends the raw file body directly to the Worker (no GitHub, laptop, or third-party Shortcuts app needed).
+
+## Architecture and limits
+
+- Worker/R2 are in Cloudflare; GitHub is **optional** for source version control, not needed for EPUB storage or catalog regeneration.
+- Catalog lists books from R2 object metadata on demand with a paginated OPDS feed (`rel="next"`). It is consistent immediately after a successful R2 PUT.
+- EPUB max **12 MiB** for MVP; rejects multipart uploads and malformed archives. This is an application safeguard, not Cloudflare's platform request-size limit.
+- For the Workers Free plan, CPU is limited; large/complex EPUBs can require optimization or Workers Paid, even when below 12 MiB. No guarantee of $0 without checking your plan/usage.
+- Full-text search, file version metadata normalization, DRM decryption and reading-progress sync are not included. Reading progress remains a separate KOSync service.
+- Cover is extracted if EPUB manifest references a small JPEG/PNG. Missing cover does not block upload.
+- Basic Auth usernames/passwords and bearer upload token are independent. The web UI is intentionally simple and read-only.
+- OPDS pages contain a modest **32 books** each because ESP32-C3/X3 has very limited RAM.
+
+## Security notes
+
+- Never turn on public R2 access. Web access is exclusively through the Worker.
+- Use separate strong read and upload credentials; rotate using `npx wrangler secret put`.
+- Limit token exposure on iPhone: an exported/shared Shortcut may include its bearer token. Never share the shortcut or its screenshots displaying tokens.
+- Make sure Cloudflare HTTPS is valid before entering secrets in CrossPoint.
+- Reading/publishing DRM-protected or copyrighted books may be subject to licensing and legal restrictions. This service protects access; it does not grant redistribution rights.
+
+See [docs/architecture.md](docs/architecture.md) for endpoints, limitations, and recovery.
