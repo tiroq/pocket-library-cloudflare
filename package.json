@@ -1,0 +1,14 @@
+{
+  "name": "pocket-library-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && wrangler deploy --dry-run"
+  },
+  "devDependencies": { "wrangler": "^4.46.0" },
+  "engines": { "node": ">=22" }
+}
