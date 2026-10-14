@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import app from '../src/index.js';
 import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText } from '../src/dashboard.js';
 
@@ -57,8 +58,7 @@ test('each true font can render Cyrillic and long wrapped events without changin
     const mono = convertDashboardBmpTo1Bit(bytes);
     assert.ok(mono.length < 1024 * 1024);
     // Glyphs are not the same bitmap dressed with four different labels.
-    images.push(Buffer.from(bytes).toString('base64').slice(0, 1500) +
-      Buffer.from(bytes).subarray(54).reduce((sum, b, n) => sum + (b === 0 ? (n % 97) + 1 : 0), 0));
+    images.push(createHash('sha256').update(bytes).digest('hex'));
   }
   assert.equal(new Set(images).size, 4);
 });
