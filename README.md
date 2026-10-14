@@ -89,6 +89,17 @@ curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
   "https://books.tiroq.dev/api/books/<64-character-id>"
 ```
 
+## Multiple calendar sources (P/F/S/W)
+
+Configure `CALENDAR_SOURCES` in private Apps Script Properties to merge
+personal, family, shared, and work calendars in one chronological agenda.
+Calendar categories render **P/F/S/W** in the existing tiny badge slot,
+without moving titles or durations. Enable/disable calendars individually
+or hide a badge using `showBadge: false`. Previous `FAMILY_CALENDAR_ID`
+and `CALENDAR_IDS` continue working when `CALENDAR_SOURCES` is unset.
+
+See **[multiple calendar setup](docs/calendar-sources.md)**.
+
 ## Shared family calendar badge
 
 The Google Apps Script can load a shared family calendar through
