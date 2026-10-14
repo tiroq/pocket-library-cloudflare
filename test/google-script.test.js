@@ -303,3 +303,127 @@ test('old CALENDAR_IDS + FAMILY_CALENDAR_ID and primary-only behavior remain unc
   assert.deepEqual(primaryOnly.reads, ['private@gmail.com']);
   assert.ok(primaryOnly.posts[0].events.every(item => !item.calendar));
 });
+
+test('work freebusy-only calendar produces W Занято intervals without reading titles', () => {
+  // This Calendar ID is not subscribed to the local CalendarApp, but Google's
+  // FreeBusy API still returns availability to an authorized user.
+  const sources = JSON.stringify([
+    { id: 'primary', category: 'personal', showBadge: false },
+    { id: 'work-only@company.com', category: 'work', mode: 'freebusy' }
+  ]);
+  const { ctx, posts, reads } = setupMultiCalendarSources(sources);
+  const apiCalls = [];
+  ctx.Utilities.parseDate = (value) => {
+    const date = value.slice(0, 10);
+    return new Date(date + 'T00:00:00+07:00');
+  };
+  ctx.Utilities.formatDate = (value, _zone, fmt) => {
+    if (fmt === 'HH:mm') {
+      const hour = (value.getUTCHours() + 7) % 24;
+      return String(hour).padStart(2, '0') + ':' +
+        String(value.getUTCMinutes()).padStart(2, '0');
+    }
+    return ({ 'yyyy-MM-dd': '2026-10-14', 'dd.MM.yyyy': '14.10.2026' })[fmt];
+  };
+  ctx.ScriptApp = { getOAuthToken: () => 'access-token' };
+  ctx.UrlFetchApp.fetch = (url, opts) => {
+    if (url === 'https://www.googleapis.com/calendar/v3/freeBusy') {
+      apiCalls.push({ url, opts });
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({
+          calendars: { 'work-only@company.com': { busy: [
+            // A busy period crossing midnight should clip to local day.
+            { start: '2026-10-13T16:30:00Z', end: '2026-10-13T18:00:00Z' },
+            { start: '2026-10-14T02:00:00Z', end: '2026-10-14T03:30:00Z' },
+            // Period ending before midnight tomorrow is out of range.
+            { start: '2026-10-14T17:00:00Z', end: '2026-10-14T18:00:00Z' }
+          ] } }
+        })
+      };
+    }
+    posts.push(JSON.parse(opts.payload));
+    return { getResponseCode: () => 200 };
+  };
+  ctx.syncX3Dashboard();
+  assert.deepEqual(reads, ['private@gmail.com']);
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].opts.headers.Authorization, 'Bearer access-token');
+  const request = JSON.parse(apiCalls[0].opts.payload);
+  assert.equal(request.timeMin, '2026-10-13T17:00:00.000Z');
+  assert.equal(request.timeMax, '2026-10-14T17:00:00.000Z');
+  assert.deepEqual(request.items, [{ id: 'work-only@company.com' }]);
+  const work = posts[0].events.filter(e => e.calendar === 'work');
+  assert.equal(work.length, 2);
+  assert.deepEqual(work.map(e => [e.time, e.title, e.durationMinutes]), [
+    ['00:00', 'Занято', 60], ['09:00', 'Занято', 90]
+  ]);
+});
+
+test('freebusy API permission errors never wipe the last uploaded dashboard', () => {
+  for (const failure of ['http403', 'calendarError', 'badJson']) {
+    const { ctx, posts } = setupMultiCalendarSources(JSON.stringify([
+      { id: 'work-only@company.com', category: 'work', mode: 'freebusy' }
+    ]));
+    ctx.Utilities.parseDate = value => new Date(value.slice(0,10) + 'T00:00:00Z');
+    ctx.ScriptApp = { getOAuthToken: () => 'access-token' };
+    ctx.UrlFetchApp.fetch = (_url, opts) => failure === 'http403'
+      ? { getResponseCode: () => 403 }
+      : failure === 'badJson'
+        ? { getResponseCode: () => 200, getContentText: () => '{' }
+        : { getResponseCode: () => 200,
+            getContentText: () => JSON.stringify({
+              calendars: { 'work-only@company.com': {
+                errors: [{ reason: 'notFound' }], busy: []
+              } }
+            })
+          };
+    assert.throws(() => ctx.syncX3Dashboard(), /FreeBusy/);
+    assert.equal(posts.length, 0);
+  }
+});
+
+test('work calendar with CalendarApp blank title is still represented as busy', () => {
+  const events = [
+    { title: '', transparency: 'OPAQUE', min: 45 },
+    { title: 'Busy', transparency: 'OPAQUE', min: 30 },
+    { title: '', transparency: 'TRANSPARENT', min: 60 },
+    { title: 'Planning', transparency: 'OPAQUE', min: 90 },
+  ];
+  const workCalendar = {
+    getId: () => 'work@example.com',
+    getEventsForDay: () => events.map((v, i) => ({
+      getTitle: () => v.title,
+      getTransparency: () => v.transparency,
+      getStartTime: () => new Date(Date.UTC(2026,9,14,2 + i,0,0)),
+      getEndTime: () => new Date(Date.UTC(2026,9,14,2 + i,0,0) + v.min*60000),
+      isAllDayEvent: () => false,
+      getId: () => 'event-' + i
+    }))
+  };
+  const posts = [];
+  const ctx = {
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: key => key === 'POCKET_UPLOAD_TOKEN' ? 'token'
+        : key === 'CALENDAR_SOURCES'
+          ? JSON.stringify([{ id: 'work@example.com', category: 'work' }]) : ''
+    }) },
+    Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
+    Utilities: { formatDate: (_now, _tz, fmt) => ({
+      'yyyy-MM-dd': '2026-10-14',
+      'dd.MM.yyyy': '14.10.2026', 'HH:mm': '09:00'
+    })[fmt] },
+    CalendarApp: { getCalendarById: () => workCalendar },
+    Tasks: { Tasklists: { list: () => ({ items: [] }) } },
+    UrlFetchApp: { fetch: (_url, opts) => {
+      posts.push(JSON.parse(opts.payload));
+      return { getResponseCode: () => 200 };
+    } },
+    console: { log: () => {} }, Date, JSON, Map
+  };
+  script.runInNewContext(ctx);
+  ctx.syncX3Dashboard();
+  assert.deepEqual(posts[0].events.map(e => [e.title, e.durationMinutes]), [
+    ['Занято', 45], ['Занято', 30], ['Planning', 90]
+  ]);
+});
