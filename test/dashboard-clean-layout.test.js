@@ -12,8 +12,8 @@ const base = {
 };
 
 test('remove Google Calendar emoji, emoji modifiers and redundant spaces BEFORE layout', () => {
-  const title = '  🎾   Теннис — Иван (60 мин)  ';
-  assert.equal(cleanDashboardTitle(title), 'Теннис — Иван (60 мин)');
+  const title = '  🎾   Теннис — урок (60 мин)  ';
+  assert.equal(cleanDashboardTitle(title), 'Теннис — урок (60 мин)');
   assert.equal(cleanDashboardTitle('👨🏽‍👩🏼‍👧🏻 Семейная встреча'), 'Семейная встреча');
   assert.equal(cleanDashboardTitle('🇹🇭  Встреча 🇺🇸'), 'Встреча');
   assert.equal(cleanDashboardTitle('☀️　Тренировка\n\t в зале   '), 'Тренировка в зале');
@@ -29,8 +29,8 @@ test('remove Google Calendar emoji, emoji modifiers and redundant spaces BEFORE 
     tasks: [{ title: '🧾   review   linkedin   for Pavlov', done: false },
       '💼   Подготовить    документы  ']
   });
-  assert.equal(normalized.events[0].title, 'Теннис — Иван (60 мин)');
-  assert.equal(normalized.tasks[0].title, 'review linkedin for Pavlov');
+  assert.equal(normalized.events[0].title, 'Теннис — урок (60 мин)');
+  assert.equal(normalized.tasks[0].title, 'review linkedin for Client');
   assert.equal(normalized.tasks[1].title, 'Подготовить документы');
   assert.equal(normalized.events[0].title[0], 'Т');
 });
@@ -40,7 +40,7 @@ test('screenshot regression: six shown meetings leave room for more than four ta
   // with only four tasks and +10 hidden despite unused space above footer.
   for (const font of DASHBOARD_FONTS) {
     const eventTitles = [
-      '🎾 Теннис — Иван (60 мин)', 'GYM: Palapon', 'Занято', 'Занято',
+      '🎾 Теннис — урок (60 мин)', 'GYM: Fitness', 'Занято', 'Занято',
       'Забрать детей из школы', 'Занято', 'Ужин', 'Созвон', 'Прогулка'
     ];
     const events = eventTitles.map((title, i) => ({
@@ -49,20 +49,20 @@ test('screenshot regression: six shown meetings leave room for more than four ta
       ...(i === 1 ? { calendar: 'family' } : i % 3 === 2 ? { calendar: 'work' } : {})
     }));
     const tasks = [
-      'review linkedin for Pavlov',
+      'review linkedin for Client',
       'бот финанс?',
-      'https://smart-lab.ru/q/bonds/SU52003RMFS9/',
-      'Застраховать обнинскую квартиру',
-      'https://chatgpt.com/s/t_6a04a671b1c88191bc44a4c06ad1345a',
+      'https://example.com/q/bonds/SU52003RMFS9/',
+      'Оформить страховку на квартиру',
+      'https://example.com/s/t_6a04a671b1c88191bc44a4c06ad1345a',
       'прививки календарь',
-      'Перевести отцовский номер с меня на него',
+      'Перенести телефонный номер на другой аккаунт',
       'Права В/У',
       'Invoice',
       ...Array.from({ length: 5 }, (_, i) => 'Задача ' + i),
     ];
     const data = normalizeDashboard({ ...base, font, events, tasks });
     const l = planDashboardLayout(data);
-    assert.equal(data.events[0].title, 'Теннис — Иван (60 мин)');
+    assert.equal(data.events[0].title, 'Теннис — урок (60 мин)');
     assert.equal(l.shownEvents, 6, font + ': keep calendar event priority');
     assert.equal(l.eventsOverflow, 3);
     assert.ok(l.shownTasks >= 5,
