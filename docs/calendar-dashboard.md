@@ -30,6 +30,28 @@ In the Shortcuts payload Dictionary add **font** as Text; use one of these
 four values. Date strings are not modified. Full details:
 **[dashboard-fonts.md](dashboard-fonts.md)**.
 
+## Adaptive agenda layout
+
+The dashboard uses the unused gap beneath the date: the first rule is now at
+**y=87** (previously 107), with the section header and first event moved up.
+Events and tasks are **not limited to 6 and 5 visible rows anymore**.
+
+- **Three events, many tasks:** show all three events, then fill the lower
+  screen with as many tasks as fit. Each task may wrap to two lines.
+- **Many events, two tasks:** give events almost all available space, keeping
+  room for both tasks and the task header.
+- **Many of both:** give events roughly half of the agenda height and reserve
+  the remaining half for tasks. Both sections show `+N ещё` when clipped.
+- **Both short:** use natural compact spacing; blank space stays below the
+  content instead of inserting a fixed vertical gap.
+- **Notes:** display only after tasks, when there is unused space. Tasks
+  and the overflow count always have priority.
+
+The date/footer, time, category markers P/F/S/W, event titles and right-hand
+duration labels keep their original horizontal positions. The 24-bit and
+1-bit BMP outputs remain pixel-equivalent. Counts refer to records in the
+posted JSON (currently capped at **20 events and 20 tasks**).
+
 ## Duration + Google Tasks
 
 The optional `durationMinutes` integer in each `events` record is rendered
@@ -48,7 +70,7 @@ iPhone Shortcut, see the [step-by-step guide](google-calendar-tasks.md).
 - `GET https://books.tiroq.dev/dashboard.bmp` – fetch the latest **528×792, uncompressed 24-bit BMP**; use the **existing read-only Basic auth** (`reader` + `READ_PASSWORD`). The image is stored in private R2 at `dashboard/current.bmp`.
 - `GET https://books.tiroq.dev/api/dashboard` – return the last uploaded JSON with Basic auth, helpful for debugging.
 - Unauthorized users receive HTTP 401; missing dashboards return 404.
-- The upload is limited to 24 KiB of JSON and up to 20 events and 20 tasks; the **image** displays 6 events, 5 tasks and a short note. Data is stored as `dashboard/current.json` (metadata) plus `dashboard/current.bmp`.
+- The upload is limited to 24 KiB of JSON and up to 20 events and 20 tasks. The **image** now dynamically packs as many events and tasks as fit, with `+N ещё` counters for any hidden entries. A short note appears only when enough room remains. Data is stored as `dashboard/current.json` (metadata) plus `dashboard/current.bmp`.
 - Calendar data is **not public**. Neither secrets nor calendar entries should be in the URL or in server logs.
 - Russian and English text are supported by four pre-rasterized proportional font families. Unsupported Unicode characters may render as a fallback glyph.
 
@@ -138,7 +160,7 @@ The Cloudflare code now provides **generation and private distribution**. To mak
 - The client posts **display strings** rather than OAuth credentials, so the Worker never needs access to Apple Calendar or Apple Reminders.
 - Passwords on X3 should be unique and read-only, never the upload token.
 - Protect the phone shortcut: it contains the upload token and allows replacing the dashboard.
-- Initial v1 shows up to six events and five tasks. The full JSON remains in R2 for a future richer UI.
+- The adaptive layout uses the available 528×792 screen height: events expand when tasks are few, and tasks expand when events are few. Under simultaneous overflow the space is shared roughly half-and-half, reserving room for each `+N` count. The image can show more than six events or five tasks.
 - Public R2 access must remain disabled.
 
 

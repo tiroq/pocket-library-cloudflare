@@ -100,6 +100,16 @@ and `CALENDAR_IDS` continue working when `CALENDAR_SOURCES` is unset.
 
 See **[multiple calendar setup](docs/calendar-sources.md)**.
 
+## Adaptive X3 agenda layout
+
+The sleep-screen bitmap packs as many events and tasks as fit rather than
+showing only six/five. When events are few, extra tasks use the remaining
+height; when tasks are few, events expand downward. If both overflow, the
+layout balances them and reserves space for `+N ещё` counts. Date/footer
+and P/F/S/W/duration columns stay aligned. No Apps Script change is required;
+deploy the updated Worker and run `syncX3Dashboard()` once. Details:
+[adaptive layout](docs/calendar-dashboard.md#adaptive-agenda-layout).
+
 ## Shared family calendar badge
 
 The Google Apps Script can load a shared family calendar through

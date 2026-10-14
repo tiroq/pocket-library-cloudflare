@@ -51,6 +51,16 @@ More details: [Google Calendar & Tasks integration](google-calendar-tasks.md).
 | Event/task titles and note | Regular (400) | **22 px** |
 | Updated time/footer | Regular (400) | **12 px** |
 
+The calendar dashboard now has **adaptive vertical layout**: the date divider
+moves from y=107 to y=87, event rows flow from y=141, and the task section
+begins immediately after the events and any overflow line. The count of
+visible rows is computed from actual wrapped text heights — never a fixed
+6-event/5-task limit. A soft ~46% task-space reservation is used only when
+tasks cannot all fit, so events take more room when there are few tasks,
+and tasks fill the screen when there are few events. Both sections reserve
+their own `+N` counter without touching the footer. Notes are lowest
+priority. The horizontal grid and P/F/S/W/duration labels are unchanged.
+
 The renderer uses actual font advances rather than the old stretched 8×8 monospaced cells. It wraps event titles at word boundaries across up to **two lines**; very long names are ellipsized only after the second line. Events and tasks are laid out in a compact vertical flow, avoiding a large fixed blank region between sections. Content exceeding the 528×792 screen's available height is truncated with a count, never drawn over the footer.
 
 ## Implementation and font licensing
