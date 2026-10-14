@@ -1,6 +1,16 @@
-import { FONT } from './dashboard-font.js';
+import { FONT_ATLASES } from './generated/dashboard-font-atlases.js';
 
 export const DASHBOARD_WIDTH = 528;
+export const DEFAULT_DASHBOARD_FONT = 'golos-text';
+export const DASHBOARD_FONTS = Object.freeze(['golos-text', 'inter', 'ibm-plex-sans', 'onest']);
+export function normalizeDashboardFont(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_DASHBOARD_FONT;
+  if (typeof value !== 'string') throw new Error('font must be a string');
+  const key = value.trim().toLowerCase().replace(/[ _]+/g, '-');
+  if (!DASHBOARD_FONTS.includes(key)) throw new Error('Unsupported font. Use: ' + DASHBOARD_FONTS.join(', '));
+  return key;
+}
+
 export const DASHBOARD_HEIGHT = 792;
 const ROW_BYTES = (DASHBOARD_WIDTH * 3 + 3) & ~3;
 const BMP_SIZE = 54 + ROW_BYTES * DASHBOARD_HEIGHT;
@@ -27,6 +37,7 @@ export function normalizeDashboard(raw) {
   }).filter(t => t.title);
   return {
     date,
+    font: normalizeDashboardFont(raw.font),
     locale: raw.locale === 'ru' ? 'ru' : 'en',
     events,
     tasks,
@@ -45,82 +56,187 @@ function bitmap() {
   h.setUint32(10, 54, true);
   h.setUint32(14, 40, true);
   h.setInt32(18, DASHBOARD_WIDTH, true);
-  h.setInt32(22, DASHBOARD_HEIGHT, true); // bottom-up BMP
+  h.setInt32(22, DASHBOARD_HEIGHT, true);
   h.setUint16(26, 1, true);
-  h.setUint16(28, 24, true); // uncompressed BGR, supported by CrossPoint
+  h.setUint16(28, 24, true);
   h.setUint32(34, ROW_BYTES * DASHBOARD_HEIGHT, true);
   h.setInt32(38, 2835, true);
   h.setInt32(42, 2835, true);
   return bytes;
 }
 
+// The four real families and five exact face sizes are rasterized at build
+// time (not dynamically downloaded or parsed by the Worker).
+const bitmapCache = new WeakMap();
+function glyphPixels(face, char, record) {
+  let decoded = bitmapCache.get(record);
+  if (!decoded) {
+    const binary = atob(record[5]);
+    decoded = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+    bitmapCache.set(record, decoded);
+  }
+  return decoded;
+}
+function faceFor(data, role) {
+  return FONT_ATLASES[data.font || DEFAULT_DASHBOARD_FONT][role];
+}
+function glyphFor(face, char) {
+  return face.glyphs[char] || face.glyphs['?'];
+}
+function textWidth(text, face) {
+  let width = 0;
+  for (const char of text) width += glyphFor(face, char)[0];
+  return width;
+}
+function ellipsize(value, face, maxWidth) {
+  const text = [...String(value)];
+  if (textWidth(text, face) <= maxWidth) return text.join('');
+  const ellipsis = '…';
+  let consumed = 0;
+  let width = 0;
+  const budget = Math.max(0, maxWidth - textWidth(ellipsis, face));
+  for (const char of text) {
+    const advance = glyphFor(face, char)[0];
+    if (width + advance > budget) break;
+    consumed++;
+    width += advance;
+  }
+  return text.slice(0, consumed).join('') + ellipsis;
+}
+
+/** Word-wrap without changing the actual text of dates or events. */
+export function wrapDashboardText(value, face, maxWidth, maxLines = 2) {
+  let remainder = [...String(value).replace(/\s+/gu, ' ').trim()];
+  const out = [];
+  while (remainder.length && out.length < maxLines) {
+    let width = 0, fit = 0, lastSpace = -1;
+    for (const ch of remainder) {
+      const advance = glyphFor(face, ch)[0];
+      if (fit > 0 && width + advance > maxWidth) break;
+      if (width + advance > maxWidth) break;
+      width += advance;
+      if (ch === ' ') lastSpace = fit;
+      fit++;
+    }
+    if (fit === remainder.length) {
+      out.push(remainder.join(''));
+      return out;
+    }
+    if (fit === 0) fit = 1; // safety for glyph wider than the region
+    const cut = lastSpace > 0 ? lastSpace : fit;
+    const line = remainder.slice(0, cut).join('').trimEnd();
+    remainder = remainder.slice(lastSpace > 0 ? cut + 1 : cut).join('').trimStart().split('');
+    if (out.length === maxLines - 1) {
+      const finalText = (line + (remainder.length ? ' ' + remainder.join('') : ''));
+      out.push(ellipsize(finalText, face, maxWidth));
+      return out;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 export function renderDashboardBmp(data) {
   const bytes = bitmap();
+  const ru = data.locale === 'ru';
   function fillRect(x, y, width, height) {
     const x0 = Math.max(0, Math.floor(x)), y0 = Math.max(0, Math.floor(y));
     const x1 = Math.min(DASHBOARD_WIDTH, Math.ceil(x + width));
     const y1 = Math.min(DASHBOARD_HEIGHT, Math.ceil(y + height));
+    if (x1 <= x0 || y1 <= y0) return;
     for (let py = y0; py < y1; py++) {
       const row = 54 + (DASHBOARD_HEIGHT - 1 - py) * ROW_BYTES;
       bytes.fill(0, row + x0 * 3, row + x1 * 3);
     }
   }
-  function fit(value, count) {
-    const chars = Array.from(String(value || ''));
-    return chars.length <= count ? chars.join('') : chars.slice(0, Math.max(0, count - 3)).join('') + '...';
-  }
-  function print(value, x, y, scale = 2, maxWidth = DASHBOARD_WIDTH - x - 24) {
-    const glyphWidth = 9 * scale;
-    const chars = Array.from(fit(value, Math.floor(maxWidth / glyphWidth)));
-    let gx = x;
-    for (const char of chars) {
-      const glyph = FONT[char] || FONT['?'];
-      if (!glyph) { gx += glyphWidth; continue; }
-      for (let py = 0; py < 8; py++) {
-        for (let px = 0; px < 8; px++) {
-          if ((glyph[py] & (1 << px)) !== 0) fillRect(gx + px * scale, y + py * scale, scale, scale);
+  function rule(y) { fillRect(28, y, 472, 2); }
+  function write(value, x, y, role, width = DASHBOARD_WIDTH - x - 25) {
+    const face = faceFor(data, role);
+    const clipped = ellipsize(value, face, width);
+    const baseline = y + face.ascent;
+    let pen = x;
+    for (const char of clipped) {
+      const rec = glyphFor(face, char);
+      const [advance, dx, dy, w, h] = rec;
+      if (w && h) {
+        const bits = glyphPixels(face, char, rec);
+        const stride = (w + 7) >> 3;
+        const bx = Math.round(pen + dx), by = Math.round(baseline + dy);
+        for (let gy = 0; gy < h; gy++) {
+          for (let gx = 0; gx < w; gx++) {
+            if (bits[gy * stride + (gx >> 3)] & (128 >> (gx & 7))) {
+              fillRect(bx + gx, by + gy, 1, 1);
+            }
+          }
         }
       }
-      gx += glyphWidth;
+      pen += advance;
     }
   }
-  function rule(y) { fillRect(28, y, 472, 2); }
+  const bodyFace = faceFor(data, 'body');
+  // Keep the date formatted exactly as provided by the Shortcut.
+  write(data.date, 28, 24, 'date', 472);
+  rule(107);
 
-  const ru = data.locale === 'ru';
-  print(data.date.toUpperCase(), 28, 34, 3);
-  rule(118);
-  print(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, 140, 2);
-  const events = data.events.slice(0, 6);
-  let y = 182;
-  if (!events.length) print(ru ? 'Нет событий' : 'No events', 30, y, 2);
-  for (const event of events) {
-    print(event.time, 30, y, 2, 112);
-    print(event.title, 144, y, 2, 354);
-    y += 36;
+  write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, 126, 'heading');
+  let eventY = 166, shownEvents = 0;
+  for (const event of data.events.slice(0, 6)) {
+    const lines = wrapDashboardText(event.title, bodyFace, 351, 2);
+    const rowH = Math.max(39, lines.length * 29 + 10);
+    if (eventY + rowH > 486 && shownEvents > 0) break;
+    write(event.time, 30, eventY + 1, 'time', 108);
+    lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', 352));
+    eventY += rowH;
+    shownEvents++;
   }
-  if (data.events.length > 6) print('+' + (data.events.length - 6) + (ru ? ' еще' : ' more'), 144, y, 2);
-  const tasksHead = Math.max(442, y + 34);
-  rule(tasksHead - 22);
-  print(ru ? 'ЗАДАЧИ' : 'TASKS', 28, tasksHead, 2);
-  let ty = tasksHead + 43;
+  if (!data.events.length) {
+    write(ru ? 'Нет событий' : 'No events', 30, eventY, 'body');
+    eventY += 41;
+  }
+  if (shownEvents < data.events.length) {
+    write('+' + (data.events.length - shownEvents) + (ru ? ' ещё' : ' more'), 146, Math.min(489, eventY + 3), 'heading');
+    eventY += 28;
+  }
+
+  const taskHeaderY = Math.min(541, Math.max(306, eventY + 22));
+  rule(taskHeaderY - 17);
+  write(ru ? 'ЗАДАЧИ' : 'TASKS', 28, taskHeaderY, 'heading');
+  let taskY = taskHeaderY + 40, shownTasks = 0;
   const tasks = data.tasks.slice(0, 5);
-  if (!tasks.length) print(ru ? 'Нет задач' : 'No tasks', 30, ty, 2);
   for (const task of tasks) {
-    // Outline box: completed tasks are solid black.
-    if (task.done) fillRect(32, ty + 3, 14, 14);
-    else { fillRect(32, ty + 3, 14, 2); fillRect(32, ty + 15, 14, 2); fillRect(32, ty + 3, 2, 14); fillRect(44, ty + 3, 2, 14); }
-    print(task.title, 58, ty, 2, 444);
-    ty += 34;
+    const lines = wrapDashboardText(task.title, bodyFace, 440, 2);
+    const rowH = Math.max(39, lines.length * 28 + 9);
+    if (taskY + rowH > 708) break;
+    // Completed: filled square, pending: outlined square.
+    if (task.done) fillRect(30, taskY + 7, 14, 14);
+    else {
+      fillRect(30, taskY + 7, 14, 2);
+      fillRect(30, taskY + 19, 14, 2);
+      fillRect(30, taskY + 7, 2, 14);
+      fillRect(42, taskY + 7, 2, 14);
+    }
+    lines.forEach((line, i) => write(line, 58, taskY + i * 28, 'body', 440));
+    taskY += rowH;
+    shownTasks++;
   }
-  if (data.tasks.length > 5) print('+' + (data.tasks.length - 5) + (ru ? ' еще' : ' more'), 58, ty, 2);
-  if (data.note && ty < 697) {
-    rule(ty + 1);
-    print(ru ? 'ЗАМЕТКА' : 'NOTE', 28, ty + 14, 2);
-    print(data.note, 28, ty + 45, 2);
+  if (!tasks.length) {
+    write(ru ? 'Нет задач' : 'No tasks', 30, taskY, 'body');
+    taskY += 36;
   }
-  rule(738);
-  print((ru ? 'ОБНОВЛЕНО ' : 'UPDATED ') + (data.updated || data.generatedAt.slice(11, 16) + ' UTC'), 28, 752, 1);
-  print('X3 / POCKET LIBRARY', 322, 752, 1, 175);
+  if (shownTasks < data.tasks.length && taskY < 711) {
+    write('+' + (data.tasks.length - shownTasks) + (ru ? ' ещё' : ' more'), 58, taskY, 'heading');
+    taskY += 27;
+  }
+  if (data.note && taskY < 655) {
+    rule(taskY + 5);
+    write(ru ? 'ЗАМЕТКА' : 'NOTE', 28, taskY + 19, 'heading');
+    wrapDashboardText(data.note, bodyFace, 470, 2)
+      .forEach((line, i) => write(line, 28, taskY + 47 + i * 28, 'body', 470));
+  }
+  rule(742);
+  write((ru ? 'Обновлено ' : 'Updated ') + (data.updated || data.generatedAt.slice(11, 16) + ' UTC'),
+    28, 757, 'footer', 278);
+  write('X3 / POCKET LIBRARY', 361, 757, 'footer', 140);
   return bytes;
 }
 

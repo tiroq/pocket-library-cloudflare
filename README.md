@@ -89,6 +89,14 @@ curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
   "https://books.tiroq.dev/api/books/<64-character-id>"
 ```
 
+## Calendar typography
+
+The dashboard now uses **Golos Text by default**, with `font` selectable in
+`POST /api/dashboard`: `golos-text`, `inter`, `ibm-plex-sans`, `onest`.
+The server generates both compact and full-size BMPs in the selected font.
+See **[docs/dashboard-fonts.md](docs/dashboard-fonts.md)** for exact sizes,
+weights, wrapping behavior and font licenses. Date formatting is unchanged.
+
 ## Calendar sleep screen (new)
 
 No extra server, package dependency, or R2 bucket is needed.
