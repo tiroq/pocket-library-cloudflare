@@ -12,6 +12,8 @@
  * 3. Configure CALENDAR_SOURCES as a JSON array of calendar IDs and
  *    personal/family/shared/work categories (optional, default legacy behavior).
  *    Work calendars that share only availability should use mode:'freebusy'.
+ *    When using FreeBusy REST, set oauthScopes explicitly in appsscript.json;
+ *    see scripts/appsscript.example.json and docs/calendar-sources.md.
  *    Existing FAMILY_CALENDAR_ID and CALENDAR_IDS continue working when
  *    CALENDAR_SOURCES is absent. Also supports DASHBOARD_FONT and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
@@ -150,9 +152,27 @@ function getX3FreeBusyIntervals(entries, now, timezone) {
     muteHttpExceptions: true
   });
   if (response.getResponseCode() !== 200) {
-    // Do not log calendar IDs, OAuth token, or private API response bodies.
+    // Google provides a machine-readable reason (e.g. insufficientPermissions,
+    // SERVICE_DISABLED, ACCESS_TOKEN_SCOPE_INSUFFICIENT). Extract only simple
+    // reason codes, NEVER raw message/body, calendar IDs, URLs or access tokens.
+    let reasons = [];
+    try {
+      const failure = JSON.parse(response.getContentText());
+      const candidates = [
+        failure.error && failure.error.status,
+        ...(failure.error && Array.isArray(failure.error.errors)
+          ? failure.error.errors.map(error => error.reason) : []),
+        ...(failure.error && Array.isArray(failure.error.details)
+          ? failure.error.details.map(detail => detail.reason) : [])
+      ];
+      reasons = [...new Set(candidates.filter(value =>
+        typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)))];
+    } catch {
+      // Some proxies send an HTML error page; keep the diagnostic generic.
+    }
     throw new Error('Google Calendar FreeBusy API HTTP ' + response.getResponseCode() +
-      '. Check Calendar API availability and Apps Script OAuth scopes.');
+      (reasons.length ? ' (' + reasons.join(', ') + ')' : '') +
+      '. Check Calendar API OAuth scopes (calendar.readonly), Cloud API enablement, and work sharing.');
   }
   let data;
   try { data = JSON.parse(response.getContentText()); }

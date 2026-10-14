@@ -97,6 +97,68 @@ subscribed calendar in CalendarApp; the FreeBusy API checks its own
 availability permissions. An inaccessible calendar causes an error
 without erasing the previous dashboard.
 
+### HTTP 403 — repair Apps Script OAuth scopes
+
+When `syncX3Dashboard` fails with
+`Google Calendar FreeBusy API HTTP 403`, the most common cause with our
+Apps Script is that its **manually fetched** OAuth token lacks a Calendar API
+scope. Apps Script can infer some CalendarApp scopes but does not always
+include scopes needed by `ScriptApp.getOAuthToken()` + `UrlFetchApp`.
+
+Under **Project Settings**, check **Show `appsscript.json` manifest file
+in editor**, then edit that file. The repository supplies a complete
+minimal example:
+**[scripts/appsscript.example.json](../scripts/appsscript.example.json)**
+
+```json
+{
+  "timeZone": "Asia/Bangkok",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      { "userSymbol": "Tasks", "serviceId": "tasks", "version": "v1" }
+    ]
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/tasks.readonly",
+    "https://www.googleapis.com/auth/script.external_request"
+  ],
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8"
+}
+```
+
+**Merge** these fields with your existing manifest; do not remove other
+advanced services or unrelated scopes that your own project uses.
+The example only needs read permissions — not calendar editing rights.
+
+Save `appsscript.json`, then manually run `syncX3Dashboard` again
+and **grant the requested Google permissions**. Do this before creating
+a periodic trigger. Inspect the **Execution log**.
+
+If it still reports HTTP 403, the script now provides a sanitized
+machine-readable reason without printing calendar IDs or OAuth tokens:
+
+- `insufficientPermissions`, `ACCESS_TOKEN_SCOPE_INSUFFICIENT`:
+  confirm `calendar.readonly` in `oauthScopes` and complete consent.
+- `SERVICE_DISABLED`, `accessNotConfigured`:
+  enable **Google Calendar API** in the Google Cloud project associated
+  with this Apps Script (Project Settings → Google Cloud Platform project,
+  then Cloud Console → APIs & Services → Library → Google Calendar API).
+  An organization administrator might control this.
+- `PERMISSION_DENIED` alone:
+  may be an API/scopes restriction or Calendar sharing denial; confirm
+  the complete Calendar ID and that the executing Google account can
+  see **at least free/busy** for this calendar.
+- `rateLimitExceeded`, `dailyLimitExceeded`:
+  reduce trigger frequency/check Google API quotas.
+
+The FreeBusy request uses the Google user's permissions and **does not**
+override organizational restrictions. Never print or share
+`ScriptApp.getOAuthToken()`, full Authorization headers, or real
+calendar events as troubleshooting logs. If you share an error with
+a helper, share only the sanitized reason code and HTTP status.
+
 For a quick diagnosis: if `syncX3Dashboard` reports a FreeBusy error,
 confirm the **actual Calendar ID**, the work calendar's sharing permissions,
 and that the Apps Script is running under the Google account which can
