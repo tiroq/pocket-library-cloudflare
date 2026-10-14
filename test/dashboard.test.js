@@ -15,6 +15,10 @@ class MemoryR2 {
     const x = this.objects.get(key);
     return x ? { size: x.bytes.byteLength, body: x.bytes } : null;
   }
+  // The dashboard tests also assert the existing OPDS route is unaffected.
+  async list({ prefix, limit, cursor }) {
+    return { objects: [], truncated: false, cursor: '' };
+  }
 }
 const env = () => ({ BOOKS_BUCKET: new MemoryR2(), READ_USER: 'reader', READ_PASSWORD: 'read-secret', UPLOAD_TOKEN: 'write-secret' });
 const ROOT = 'https://books.tiroq.dev';
