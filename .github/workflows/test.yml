@@ -20,3 +20,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Bundle Worker (dry run)
+        run: npx wrangler deploy --dry-run
