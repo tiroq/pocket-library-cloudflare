@@ -89,6 +89,13 @@ curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
   "https://books.tiroq.dev/api/books/<64-character-id>"
 ```
 
+## Shared family calendar badge
+
+The Google Apps Script can load a shared family calendar through
+`FAMILY_CALENDAR_ID` and mark its events with a compact **F** in the
+existing time/title gap. It does not shift event titles or durations.
+See [family calendar setup](docs/google-calendar-tasks.md#shared-family-calendar-and-the-tiny-f-marker).
+
 ## Google Calendar durations + Google Tasks
 
 Calendar events can include optional `durationMinutes` values in the existing
