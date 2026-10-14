@@ -52,8 +52,13 @@ export function normalizeDashboard(raw) {
   const events = raw.events.map(e => {
     if (!e || typeof e !== 'object' || Array.isArray(e)) throw new Error('Invalid event');
     const durationMinutes = normalizeDurationMinutes(e.durationMinutes);
+    if (e.calendar != null && e.calendar !== '' &&
+        e.calendar !== 'family' && e.calendar !== 'primary') {
+      throw new Error('calendar must be primary or family');
+    }
     return { time: clean(e.time ?? '', 20), title: clean(e.title, 120),
-      ...(durationMinutes === null ? {} : { durationMinutes }) };
+      ...(durationMinutes === null ? {} : { durationMinutes }),
+      ...(e.calendar === 'family' ? { calendar: 'family' } : {}) };
   }).filter(e => e.title);
   const tasks = raw.tasks.map(t => {
     if (typeof t === 'string') return { title: clean(t, 120), done: false };
@@ -215,7 +220,18 @@ export function renderDashboardBmp(data) {
     const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
     const rowH = Math.max(39, lines.length * 29 + 10);
     if (eventY + rowH > 486 && shownEvents > 0) break;
-    write(event.time, 30, eventY + 1, 'time', 108);
+    // Family badge occupies the existing 34px gap between the time and the
+    // event title; title x=146 and duration column remain unchanged.
+    // Limit family time to the left side of the gap to prevent any collision.
+    write(event.time, 30, eventY + 1, 'time', event.calendar === 'family' ? 86 : 108);
+    if (event.calendar === 'family') {
+      const bx = 119, by = eventY + 8, size = 19;
+      fillRect(bx, by, size, 1);
+      fillRect(bx, by + size - 1, size, 1);
+      fillRect(bx, by, 1, size);
+      fillRect(bx + size - 1, by, 1, size);
+      write('F', bx + 6, by + 2, 'footer', size - 8);
+    }
     lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', titleWidth));
     if (duration) write(duration, 500 - badgeWidth, eventY + 3, 'heading', badgeWidth + 1);
     eventY += rowH;
