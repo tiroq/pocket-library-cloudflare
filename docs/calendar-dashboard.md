@@ -30,6 +30,90 @@ In the Shortcuts payload Dictionary add **font** as Text; use one of these
 four values. Date strings are not modified. Full details:
 **[dashboard-fonts.md](dashboard-fonts.md)**.
 
+## Context-aware dashboard: weekday, weather, remaining events and task urgency
+
+The existing Google Apps Script can now render **today's weekday** in the
+large date heading, e.g. `СР · 14.10.2026`, and send a tiny weather label,
+e.g. `30° Дождь`, for the right-hand side of the same header. Layout is
+monochrome and the weather title is clipped to a narrow right-aligned column,
+never drawn over the date. No API key is needed for Open-Meteo.
+
+### Script Properties
+
+| Property | Default | Supported values |
+|---|---|---|
+| `WEEKDAY_STYLE` | `short` | `short` (СР), `full` (СРЕДА), `none` |
+| `EVENTS_MODE` | `remaining` | `remaining` (hide events that have ended), `all` (entire day) |
+| `TASK_SORT` | `due` | `due` (overdue → today → undated), `original` (Google Tasks list order) |
+| `INCLUDE_UNDATED_TASKS` | `false` | `true` includes tasks without due dates |
+| `WEATHER_LAT` | blank | latitude between -90 and 90, optional |
+| `WEATHER_LON` | blank | longitude between -180 and 180, optional |
+
+For the weather, set **both** `WEATHER_LAT` and `WEATHER_LON` to the
+coordinates of the intended location. **The app does not assume your city or
+use device GPS.** If both are unset the header remains weather-free. Current
+temperature and WMO weather code are fetched from
+[Open-Meteo](https://open-meteo.com/en/docs) with `UrlFetchApp.fetch`.
+Weather API outages are fail-open: calendar/tasks still update, with weather
+omitted from that refresh. Only coordinates are sent to Open-Meteo.
+
+`remaining` filters out events with `end <= now`, **not** events that
+started earlier but are still ongoing. This applies to both standard events
+and FreeBusy-only work intervals. It is calculated by Apps Script at the
+time of its next scheduled run; the static BMP does **not** change between
+runs. Use `EVENTS_MODE=all` to see the full day again.
+
+Task priority is applied **before** the 20-task upload limit, across all
+Google Task lists. In `due` mode the oldest overdue tasks appear first,
+then tasks due today, then undated tasks (only if enabled). Overdue tasks
+are marked with a small `!` inside their existing checkbox; task titles
+are not shifted. The Worker still displays tasks in the order supplied
+by the uploader. No sensitive task dates need to be written to the image.
+
+### Stale-sync footer on a static BMP
+
+Google Apps Script updates a **snapshot** on every successful
+`POST /api/dashboard`. Failed Google runs do not reach Cloudflare.
+Because BMP is static, it **cannot detect a failure by itself**.
+
+The Worker now uses a **Cloudflare Cron Trigger** (`*/15 * * * *`) to check
+the original server-side `generatedAt` of that snapshot. If no successful
+upload arrived within `DASHBOARD_STALE_MINUTES` (default **45 minutes**),
+it rebuilds both BMP files and adds `! СИНХР. >45M` to the **footer**.
+The original JSON and its upload timestamp are **never updated** by Cron.
+This means the warning is accurate and is not an invented Google error.
+
+Configure `DASHBOARD_STALE_MINUTES` in `wrangler.jsonc`, or change the
+Worker variable to another integer from 15 to 1440. Cron will render
+the warning only once for a stale snapshot; it won't rewrite the same
+image indefinitely. A new successful upload automatically clears the
+warning and updates the timestamp.
+
+**Device limitation:** Cloudflare can regenerate the stored BMP even if
+Google stops sending data, but **an already sleeping X3 still displays the
+previous pixels until it fetches the newer BMP** (existing plugin or Wi-Fi
+upload workflow). Neither an Apps Script trigger nor Cloudflare Cron can
+push an updated image to a sleeping CrossPoint 1.6.5 device on its own.
+
+### Rollout
+
+1. Deploy new Cloudflare Worker from updated `main`:
+   `git pull --ff-only && npm ci && npm test && npx wrangler deploy`.
+   This also publishes the Cron Trigger, which is a Worker configuration.
+2. Paste the latest
+   [scripts/google-calendar-tasks.gs](../scripts/google-calendar-tasks.gs)
+   into your existing Google Apps Script `Code.gs`. Do **not** use
+   `Deploy → New deployment` for time-driven triggers.
+3. Set optional Script Properties above. Leave existing
+   `POCKET_UPLOAD_TOKEN`, `CALENDAR_SOURCES` and Tasks API manifest alone.
+4. Run `syncX3Dashboard()` manually, then continue with the existing
+   15-minute time-driven trigger. Do not create a second upload trigger.
+5. Check `/dashboard-1bit.bmp`. To test stale behavior without disabling
+   Google permanently, temporarily disable the Apps Script trigger and
+   wait 45–60 minutes for the Cron to mark the image; then re-enable it,
+   run manually and verify the warning clears. Remember to restore the
+   trigger after testing.
+
 ## Adaptive agenda layout
 
 The dashboard uses the unused gap beneath the date: the first rule is now at
