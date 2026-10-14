@@ -64,7 +64,7 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
   assert.equal(payload.events[0].durationMinutes, 90);
   assert.deepEqual(payload.tasks.map(t => t.title), ['Просроченная задача', 'Купить продукты']);
   assert.equal(payload.tasks.some(t => t.title === 'Готово'), false);
-  assert.equal(payload.date, '14.10.2026');
+  assert.equal(payload.date, 'СР · 14.10.2026');
   assert.equal(payload.font, 'golos-text');
 });
 
