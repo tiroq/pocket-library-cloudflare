@@ -311,7 +311,7 @@ test('adaptive layout shows all records and no +N when both lists fit', () => {
   assert.equal(layout.shownTasks, 2);
   assert.equal(layout.eventsOverflowY, null);
   assert.equal(layout.tasksOverflowY, null);
-  assert.equal(layout.taskHeadingY, DASHBOARD_LAYOUT.eventStartY + 39 + 19);
+  assert.equal(layout.taskHeadingY, DASHBOARD_LAYOUT.eventStartY + 39 + DASHBOARD_LAYOUT.taskHeaderOffset);
   assert.ok(layout.taskHeadingY < 306);
 });
 

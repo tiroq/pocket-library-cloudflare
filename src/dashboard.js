@@ -21,6 +21,21 @@ function clean(value, limit = 140) {
   return Array.from(value.replace(/[\x00-\x1F\x7F]/g, ' ').trim()).slice(0, limit).join('');
 }
 
+
+/**
+ * Remove pictographic emoji unsupported by our small E-Ink font atlases;
+ * collapse extra Unicode whitespace to avoid stray '?' or a wide left gap.
+ * Keep legitimate punctuation (including '?'), digits and Cyrillic intact.
+ */
+export function cleanDashboardTitle(value, limit = 120) {
+  if (typeof value !== 'string') throw new Error('Text fields must be strings');
+  const stripped = value.normalize('NFC')
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Regional_Indicator}\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}\u200D\uFE0E\uFE0F\u20E3]/gu, ' ')
+    .replace(/[\x00-\x1F\x7F]/g, ' ')
+    .replace(/\s+/gu, ' ').trim();
+  return Array.from(stripped).slice(0, limit).join('').trim();
+}
+
 /**
  * Optional event duration, measured in whole minutes. Older iPhone Shortcuts
  * without durationMinutes retain their original layout. Stringified integers
@@ -91,14 +106,14 @@ export function normalizeDashboard(raw) {
         !Object.hasOwn(DASHBOARD_CALENDAR_CATEGORIES, e.calendar)) {
       throw new Error('calendar must be personal, family, shared, work or primary');
     }
-    return { time: clean(e.time ?? '', 20), title: clean(e.title, 120),
+    return { time: clean(e.time ?? '', 20), title: cleanDashboardTitle(e.title, 120),
       ...(durationMinutes === null ? {} : { durationMinutes }),
       ...(Object.hasOwn(DASHBOARD_CALENDAR_CATEGORIES, e.calendar) ? { calendar: e.calendar } : {}) };
   }).filter(e => e.title);
   const tasks = raw.tasks.map(t => {
-    if (typeof t === 'string') return { title: clean(t, 120), done: false };
+    if (typeof t === 'string') return { title: cleanDashboardTitle(t, 120), done: false };
     if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('Invalid task');
-    return { title: clean(t.title, 120), done: t.done === true,
+    return { title: cleanDashboardTitle(t.title, 120), done: t.done === true,
       ...(t.overdue === true ? { overdue: true } : {}) };
   }).filter(t => t.title);
   return {
@@ -221,10 +236,10 @@ export const DASHBOARD_LAYOUT = Object.freeze({
   eventStartY: 141,
   footerRuleY: 742,
   contentBottomY: 734,
-  taskHeaderOffset: 19,
-  taskStartOffset: 40,
+  taskHeaderOffset: 17,
+  taskStartOffset: 33,
   eventOverflowH: 27,
-  taskOverflowH: 27,
+  taskOverflowH: 22,
 });
 
 export function planDashboardLayout(data) {
@@ -241,7 +256,9 @@ export function planDashboardLayout(data) {
   });
   const tasks = data.tasks.map(task => {
     const lines = wrapDashboardText(task.title, bodyFace, 440, 2);
-    return { task, lines, height: Math.max(39, lines.length * 28 + 9) };
+    // Keep the 28px two-line baseline; trim redundant margins so more
+    // tasks and the +N counter can fit in the remaining footer gap.
+    return { task, lines, height: Math.max(35, lines.length * 28 + 4) };
   });
 
   const sectionOverhead = layout.taskHeaderOffset + layout.taskStartOffset;
