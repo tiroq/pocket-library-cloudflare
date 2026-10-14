@@ -36,6 +36,11 @@ The response now echoes `"font": "golos-text"`. The read-only `GET /api/dashboar
 
 **The date is intentionally passed through unchanged.** This change does not correct Buddhist-calendar years or otherwise reformat any date. Configure the date separately in your Shortcut when desired.
 
+The optional event duration badge is rendered right-aligned beside the event
+title in **17 px Medium**, with `durationMinutes` such as 30, 60 or 90
+mapped to `(30M)`, `(1H)`, or `(1H 30M)`.
+More details: [Google Calendar & Tasks integration](google-calendar-tasks.md).
+
 ## Fixed typography and layout
 
 | Element | Face | Size |
