@@ -60,7 +60,7 @@ export function normalizeX3HeaderDate(raw) {
 export function normalizeX3WeatherForecast(raw) {
   if (raw == null) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
-      typeof raw.date !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(raw.date) ||
+      typeof raw.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date) ||
       typeof raw.tomorrow !== 'boolean' ||
       !Array.isArray(raw.periods) || raw.periods.length !== 3) {
     throw new Error('weatherForecast requires date, tomorrow and three periods');
