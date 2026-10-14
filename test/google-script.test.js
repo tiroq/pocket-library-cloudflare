@@ -127,7 +127,9 @@ test('shared family calendar is added to primary and its events receive F marker
     Date,
     JSON
   });
-  script.runInNewContext(makeContext());
+  const one = makeContext();
+  script.runInNewContext(one);
+  one.syncX3Dashboard();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].events.map(e => e.title),
     ['Личная встреча', 'Семейное мероприятие']);
@@ -138,7 +140,9 @@ test('shared family calendar is added to primary and its events receive F marker
 
   // Family is not duplicated if an existing CALENDAR_IDS list also has it.
   calendarsRead.length = 0;
-  script.runInNewContext(makeContext('primary-id,family-id,family-id'));
+  const two = makeContext('primary-id,family-id,family-id');
+  script.runInNewContext(two);
+  two.syncX3Dashboard();
   assert.equal(sent.length, 2);
   assert.equal(sent[1].events.length, 2);
   assert.equal(sent[1].events.filter(e => e.calendar === 'family').length, 1);
