@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import app from '../src/index.js';
-import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText, normalizeDurationMinutes, formatEventDuration, DASHBOARD_CALENDAR_CATEGORIES } from '../src/dashboard.js';
+import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText, normalizeDurationMinutes, formatEventDuration, DASHBOARD_CALENDAR_CATEGORIES, planDashboardLayout, DASHBOARD_LAYOUT } from '../src/dashboard.js';
 
 class MemoryR2 {
   constructor() { this.objects = new Map(); }
@@ -155,7 +155,7 @@ test('all four calendar categories render distinct compact badges without shifti
         for (let x = 0; x < DASHBOARD_WIDTH; x++) {
           if (plain[row + x * 3] === rendered[row + x * 3]) continue;
           pixelsDifferent++;
-          assert.ok(x >= 119 && x <= 137 && y >= 174 && y < 195,
+          assert.ok(x >= 119 && x <= 137 && y >= DASHBOARD_LAYOUT.eventStartY + 8 && y < DASHBOARD_LAYOUT.eventStartY + 29,
             font + '/' + category + ' moved content pixel at ' + x + ',' + y);
         }
       }
@@ -190,7 +190,7 @@ test('family marker never shifts time, title or duration even with Cyrillic and 
         const pixel = row + x * 3;
         if (regular[pixel] === tagged[pixel]) continue;
         changes++;
-        assert.ok(x >= 119 && x <= 137 && y >= 174 && y < 195,
+        assert.ok(x >= 119 && x <= 137 && y >= DASHBOARD_LAYOUT.eventStartY + 8 && y < DASHBOARD_LAYOUT.eventStartY + 29,
           'unexpected pixel change at ' + x + ',' + y);
       }
     }
@@ -230,6 +230,112 @@ test('family calendar metadata persists in dashboard JSON, rejects unsupported t
   }
 });
 
+test('adaptive layout uses blank space for tasks when events are few (screenshot scenario)', () => {
+  const data = normalizeDashboard({
+    ...example,
+    date: '14.10.2026',
+    events: [
+      { time: '14:50', title: 'Забрать детей из школы', durationMinutes: 30 },
+      { time: '16:30', title: 'Dance class', calendar: 'family', durationMinutes: 60 },
+      { time: '18:00', title: 'Занято', calendar: 'work', durationMinutes: 30 }
+    ],
+    tasks: [
+      "Физра Илья",
+      "Children's Theme Discussion Notes: Importance of family values in upbringing",
+      ...Array.from({ length: 15 }, (_, i) => 'Задача номер ' + (i + 1))
+    ]
+  });
+  const layout = planDashboardLayout(data);
+  assert.equal(layout.shownEvents, 3);
+  assert.equal(layout.eventsOverflow, 0);
+  assert.ok(layout.shownTasks >= 7,
+    'must show more than old fixed 5 tasks when only three events exist');
+  assert.equal(layout.tasksOverflow, data.tasks.length - layout.shownTasks);
+  assert.ok(layout.taskHeadingY < 306, 'no fixed minimum at 306 should remain');
+  assert.equal(layout.events[0].y, DASHBOARD_LAYOUT.eventStartY);
+  assert.ok(layout.taskStartY > layout.events.at(-1).y);
+  assert.ok(layout.tasks.at(-1).y + layout.tasks.at(-1).height +
+    (layout.tasksOverflow ? DASHBOARD_LAYOUT.taskOverflowH : 0) <=
+    DASHBOARD_LAYOUT.contentBottomY);
+  assert.ok(convertDashboardBmpTo1Bit(renderDashboardBmp(data)).length < 1024 * 1024);
+});
+
+test('adaptive layout loans event space when only two tasks exist', () => {
+  const data = normalizeDashboard({
+    ...example,
+    events: Array.from({ length: 20 }, (_, i) => ({
+      time: String(i).padStart(2, '0') + ':00', title: 'Событие ' + i,
+      durationMinutes: 30, calendar: 'work'
+    })),
+    tasks: ['Купить продукты', 'Проверить почту']
+  });
+  const layout = planDashboardLayout(data);
+  assert.ok(layout.shownEvents > 6, 'old six-event cap must be gone');
+  assert.equal(layout.shownTasks, 2, 'two tasks still fit below events');
+  assert.equal(layout.tasksOverflow, 0);
+  assert.equal(layout.eventsOverflow, data.events.length - layout.shownEvents);
+  assert.ok(layout.events.at(-1).y < layout.taskHeadingY);
+});
+
+test('mutual overflow balances events and tasks with guaranteed +N rows', () => {
+  for (const font of DASHBOARD_FONTS) {
+    const data = normalizeDashboard({
+      ...example, font,
+      events: Array.from({ length: 20 }, (_, i) => ({
+        time: '11:00', title: 'Встреча ' + (i + 1), durationMinutes: 45,
+        calendar: i % 2 ? 'work' : 'family'
+      })),
+      tasks: Array.from({ length: 20 }, (_, i) => 'Задача ' + (i + 1))
+    });
+    const layout = planDashboardLayout(data);
+    assert.ok(layout.shownEvents >= 4 && layout.shownTasks >= 4, font);
+    assert.ok(layout.eventsOverflow > 0 && layout.tasksOverflow > 0, font);
+    assert.equal(layout.eventsOverflow, 20 - layout.shownEvents);
+    assert.equal(layout.tasksOverflow, 20 - layout.shownTasks);
+    assert.ok(layout.eventsOverflowY < layout.taskHeadingY - 17);
+    assert.ok(layout.tasksOverflowY + 25 < DASHBOARD_LAYOUT.footerRuleY);
+    assert.ok(layout.tasks.at(-1).y >= layout.taskStartY);
+    assert.ok(layout.taskHeadingY > layout.events.at(-1).y);
+    assert.equal(new DataView(renderDashboardBmp(data).buffer).getUint16(28,true), 24);
+  }
+});
+
+test('adaptive layout shows all records and no +N when both lists fit', () => {
+  const data = normalizeDashboard({
+    ...example,
+    events: [{ title: 'Tennis', time: '08:00', durationMinutes: 45 }],
+    tasks: ['Water', 'Lunch']
+  });
+  const layout = planDashboardLayout(data);
+  assert.equal(layout.shownEvents, 1);
+  assert.equal(layout.shownTasks, 2);
+  assert.equal(layout.eventsOverflowY, null);
+  assert.equal(layout.tasksOverflowY, null);
+  assert.equal(layout.taskHeadingY, DASHBOARD_LAYOUT.eventStartY + 39 + 19);
+  assert.ok(layout.taskHeadingY < 306);
+});
+
+test('wrapped titles, optional note and empty sections stay inside footer bounds', () => {
+  const data = normalizeDashboard({
+    ...example,
+    events: [
+      { title: 'Очень длинное название мероприятия, которое занимает две строки и не помещается в одну', time: '12:00', durationMinutes: 90 }
+    ],
+    tasks: [
+      'A very long task title for a family project that wraps across two lines gracefully'
+    ],
+    note: 'A very short note'
+  });
+  const l = planDashboardLayout(data);
+  assert.equal(l.events[0].lines.length, 2);
+  assert.ok(l.tasks[0].lines.length > 1);
+  assert.ok(l.note && l.note.lines.length === 1);
+  const bothEmpty = planDashboardLayout(normalizeDashboard({ ...example, events: [], tasks: [] }));
+  assert.equal(bothEmpty.shownEvents, 0);
+  assert.equal(bothEmpty.shownTasks, 0);
+  assert.ok(bothEmpty.taskStartY < DASHBOARD_LAYOUT.contentBottomY);
+});
+
 test('dashboard schema validation and Unicode', () => {
   assert.equal(normalizeDashboard(example).events[0].title, 'Встреча с командой');
   assert.throws(() => normalizeDashboard({ date: 'now', tasks: [], events: 'x' }), /arrays/);
@@ -251,7 +357,7 @@ test('render exact X3 BMP with supported 24-bit uncompressed header and Cyrillic
   // White corners, black calendar header and a black section divider.
   assert.equal(bmp[54], 255);
   assert.ok(bmp.subarray(54).includes(0));
-  const row = 54 + (DASHBOARD_HEIGHT - 1 - 107) * (DASHBOARD_WIDTH * 3);
+  const row = 54 + (DASHBOARD_HEIGHT - 1 - DASHBOARD_LAYOUT.dateRuleY) * (DASHBOARD_WIDTH * 3);
   assert.equal(bmp[row + 30 * 3], 0);
 });
 
