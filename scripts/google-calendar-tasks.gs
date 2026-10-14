@@ -17,6 +17,7 @@
  *    Existing FAMILY_CALENDAR_ID and CALENDAR_IDS continue working when
  *    CALENDAR_SOURCES is absent. Also supports DASHBOARD_FONT and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
+ *    WEATHER_MODE=auto|today, WEATHER_LAT/LON for cached hourly forecast.
  *    EVENTS_MODE=remaining|all, WEEKDAY_STYLE=short|full|none,
  *    TASK_SORT=due|original; optional WEATHER_LAT and WEATHER_LON.
  * 4. Set Apps Script timezone to your actual local timezone.
@@ -210,43 +211,105 @@ function getX3FreeBusyIntervals(entries, now, timezone) {
  * Location is configured by Script Properties WEATHER_LAT / WEATHER_LON.
  * A broken external weather API should never block calendar synchronization.
  */
-function getX3Weather(properties) {
+const X3_WEATHER_HOURS = [8, 14, 20];
+const X3_WEATHER_CACHE_KEY = 'X3_WEATHER_CACHE_V1';
+
+function x3NextDate(dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+}
+
+function getX3HeaderDate(dateKey, weekdayStyle) {
+  const day = Number(dateKey.slice(8, 10));
+  const month = Number(dateKey.slice(5, 7));
+  const months = ['ЯНВ', 'ФЕВ', 'МАР', 'АПР', 'МАЙ', 'ИЮН',
+    'ИЮЛ', 'АВГ', 'СЕН', 'ОКТ', 'НОЯ', 'ДЕК'];
+  return { day, weekday: getX3Weekday(dateKey, weekdayStyle).replace(/ · $/, ''),
+    month: months[month - 1] };
+}
+
+/**
+ * Hourly Open-Meteo for two distinct *local* dates. Cache the successful
+ * six-point forecast in private Apps Script Script Properties. Never use a
+ * cached forecast for a different date or coordinates.
+ *
+ * "auto": after local 20:00 show tomorrow, with a visible tomorrow label.
+ * "today": always show today. Re-fetch every trigger, overwriting cached
+ * values when API values change, and fall back to cached values on outage.
+ */
+function getX3Weather(properties, now, timezone, todayKey) {
   const latText = String(properties.getProperty('WEATHER_LAT') || '').trim();
   const lonText = String(properties.getProperty('WEATHER_LON') || '').trim();
-  if (!latText && !lonText) return '';
+  if (!latText && !lonText) return null;
   if (!latText || !lonText) throw new Error('Set both WEATHER_LAT and WEATHER_LON');
   const lat = Number(latText), lon = Number(lonText);
   if (!Number.isFinite(lat) || !Number.isFinite(lon) ||
       lat < -90 || lat > 90 || lon < -180 || lon > 180) {
     throw new Error('Invalid WEATHER_LAT / WEATHER_LON');
   }
+  const mode = String(properties.getProperty('WEATHER_MODE') || 'auto').trim().toLowerCase();
+  if (mode !== 'auto' && mode !== 'today') throw new Error('WEATHER_MODE must be auto or today');
+  const nextKey = x3NextDate(todayKey);
+  const localHour = Number(Utilities.formatDate(now, timezone, 'HH'));
+  const tomorrow = mode === 'auto' && localHour >= 20;
+  const targetKey = tomorrow ? nextKey : todayKey;
+  // Prefix is needed because the same Google account may edit coordinates.
+  const signature = lat.toFixed(5) + ',' + lon.toFixed(5) + ',' + timezone;
+  let cached = null;
+  try {
+    const saved = JSON.parse(properties.getProperty(X3_WEATHER_CACHE_KEY) || 'null');
+    if (saved && saved.signature === signature && saved.days &&
+        typeof saved.days === 'object' && !Array.isArray(saved.days)) cached = saved;
+  } catch { /* malformed cache is ignored, never blocks calendar updates */ }
+  let days = cached ? cached.days : {};
   try {
     const url = 'https://api.open-meteo.com/v1/forecast?latitude=' +
       encodeURIComponent(lat) + '&longitude=' + encodeURIComponent(lon) +
-      '&current=temperature_2m,weather_code';
+      '&hourly=temperature_2m,weather_code&timezone=' +
+      encodeURIComponent(timezone) + '&forecast_days=2';
     const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (response.getResponseCode() !== 200) {
-      console.log('Weather API temporarily unavailable, HTTP ' + response.getResponseCode());
-      return '';
+    if (response.getResponseCode() !== 200) throw new Error('HTTP ' + response.getResponseCode());
+    const hourly = JSON.parse(response.getContentText()).hourly;
+    if (!hourly || !Array.isArray(hourly.time) ||
+        !Array.isArray(hourly.temperature_2m) || !Array.isArray(hourly.weather_code)) {
+      throw new Error('missing hourly arrays');
     }
-    const current = JSON.parse(response.getContentText()).current;
-    if (!current || !Number.isFinite(current.temperature_2m) ||
-        !Number.isFinite(current.weather_code)) return '';
-    const code = current.weather_code;
-    const label = code === 0 ? 'Ясно'
-      : code <= 2 ? 'Перем.'
-      : code === 3 ? 'Обл.'
-      : code <= 48 ? 'Туман'
-      : code <= 67 ? 'Дождь'
-      : code <= 77 ? 'Снег'
-      : code <= 82 ? 'Ливень'
-      : code <= 86 ? 'Снег'
-      : 'Гроза';
-    return Math.round(current.temperature_2m) + '° ' + label;
+    const updated = {};
+    for (const key of [todayKey, nextKey]) {
+      const periods = X3_WEATHER_HOURS.map(hour => {
+        const stamp = key + 'T' + String(hour).padStart(2, '0') + ':00';
+        const i = hourly.time.indexOf(stamp);
+        const temp = i >= 0 ? hourly.temperature_2m[i] : null;
+        const code = i >= 0 ? hourly.weather_code[i] : null;
+        if (!Number.isFinite(temp) || !Number.isInteger(code) || code < 0 || code > 99) return null;
+        return { hour, temp: Math.round(temp), code };
+      });
+      if (periods.every(Boolean)) updated[key] = periods;
+    }
+    if (!Object.keys(updated).length) throw new Error('forecast has no complete day');
+    // Keep previously cached current/next days in case Open-Meteo only
+    // returns one complete day, but discard all older/future dates.
+    const merged = {};
+    for (const key of [todayKey, nextKey]) {
+      if (updated[key]) merged[key] = updated[key];
+      else if (days[key]) merged[key] = days[key];
+    }
+    const result = { signature, days: merged };
+    const serialized = JSON.stringify(result);
+    if (JSON.stringify(cached) !== serialized) {
+      try { properties.setProperty(X3_WEATHER_CACHE_KEY, serialized); }
+      catch { console.log('Weather cache write unavailable'); }
+    }
+    days = merged;
   } catch {
-    console.log('Weather temporarily unavailable');
-    return '';
+    console.log('Weather unavailable; using last cached forecast for matching date');
   }
+  const selected = days[targetKey];
+  if (!Array.isArray(selected) || selected.length !== 3 ||
+      !selected.every((p, i) => p && p.hour === X3_WEATHER_HOURS[i] &&
+        Number.isInteger(p.temp) && Number.isInteger(p.code) &&
+        p.temp >= -90 && p.temp <= 60 && p.code >= 0 && p.code <= 99)) return null;
+  return { date: targetKey, tomorrow, periods: selected };
 }
 
 function getX3Weekday(dateKey, style) {
@@ -380,7 +443,8 @@ function syncX3Dashboard() {
     locale: 'ru',
     font: properties.getProperty('DASHBOARD_FONT') || 'golos-text',
     date: getX3Weekday(dateKey, weekdayStyle) + Utilities.formatDate(now, timezone, 'dd.MM.yyyy'),
-    weather: getX3Weather(properties),
+    headerDate: getX3HeaderDate(dateKey, weekdayStyle),
+    weatherForecast: getX3Weather(properties, now, timezone, dateKey),
     updated: Utilities.formatDate(now, timezone, 'HH:mm'),
     events: orderedEvents,
     tasks: tasks.slice(0, X3_MAX_TASKS).map(task => ({ title: task.title, done: task.done,
