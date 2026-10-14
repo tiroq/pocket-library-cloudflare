@@ -89,6 +89,15 @@ curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
   "https://books.tiroq.dev/api/books/<64-character-id>"
 ```
 
+## Google Calendar durations + Google Tasks
+
+Calendar events can include optional `durationMinutes` values in the existing
+`POST /api/dashboard` JSON. The X3 renders compact right-aligned labels
+such as `(30M)` and `(1H 30M)`. Existing payloads work unchanged.
+See [Google Calendar & Tasks integration](docs/google-calendar-tasks.md)
+for the additional iPhone Shortcut action and the optional private
+Apps Script synchronizer for Google Tasks.
+
 ## Calendar typography
 
 The dashboard now uses **Golos Text by default**, with `font` selectable in
