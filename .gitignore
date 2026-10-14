@@ -7,3 +7,6 @@ node_modules/
 *.epub
 *.zip
 *.log
+
+# Read-only Basic credential generated on the user's machine for the X3 microSD plugin.
+plugins/**/config.json
