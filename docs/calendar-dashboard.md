@@ -153,16 +153,21 @@ push an updated image to a sleeping CrossPoint 1.6.5 device on its own.
    run manually and verify the warning clears. Remember to restore the
    trigger after testing.
 
-## Compact agenda headers, links, and 24-hour occupancy
+## Compact agenda headers, links, and focused daily occupancy
 
-The E-Ink dashboard now uses minimal hand-drawn calendar/checklist icons with
-**ПЛАН / ДЕЛА** captions in place of the longer section titles. The event
-heading contains a thin **24-hour occupancy bar** on the right (0:00–24:00):
-black segments show times with scheduled meetings, including shared FreeBusy
-work blocks. Overlapping intervals are merged. The bar uses *all* timed
-calendar entries from the day **before** `EVENTS_MODE=remaining` removes
-completed meetings, so it stays a truthful daily overview even at night.
-All-day events do not fill the entire bar.
+The E-Ink dashboard uses minimal hand-drawn calendar/checklist icons with
+**ПЛАН / ДЕЛА** captions. The event heading contains a thin **focused
+occupancy bar** on the right, with black segments for scheduled meetings
+including FreeBusy work intervals. The time window adapts to the day's
+first/last occupied periods, with 1-hour rounded padding and a minimum
+10-hour window to avoid giant bars for tiny appointments. For instance,
+meetings between 07:00 and 17:00 produce a legible **06–12–18** scale
+rather than 00–12–24. With zero events or a single ordinary appointment,
+the scale uses stable **07:00–22:00** boundaries (extending as needed for
+late-night/early-morning meetings). The bar uses *all* timed calendar
+entries from the day **before** `EVENTS_MODE=remaining` removes
+completed meetings. Overlapping intervals are merged; all-day events
+do not fill the entire bar.
 
 The Google Apps Script sends an optional `busyIntervals` array in minutes
 from local midnight, e.g. `[{"start":420,"end":480}]`. Each endpoint is
@@ -177,7 +182,12 @@ not visible on the BMP. The collector currently limits its total candidates
 to 500 tasks; on exceptionally large accounts the count is bounded by
 those collected tasks. Older clients derive it from submitted
 `overdue: true` flags. None of these badges changes the adaptive
-section heights.
+section heights. The adaptive task fitter now tries a **one-line ellipsized
+version of the next two-line task** if the complete task would not fit above
+the footer. This uses the otherwise empty gap without skipping a more urgent
+task or shrinking the base font; the `+N ещё` counter is reserved and still
+reflects the actual number of hidden tasks. Earlier tasks remain two lines
+where space permits.
 
 Long `https://` links inside task titles or calendar event names become
 compact display labels such as `example.org / bonds` while preserving
