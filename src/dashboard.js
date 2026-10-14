@@ -445,6 +445,45 @@ export function renderDashboardBmp(data, options = {}) {
       }
     }
   }
+  function sectionCalendar(x, y) {
+    fillRect(x, y + 3, 18, 1);
+    fillRect(x, y + 19, 18, 1);
+    fillRect(x, y + 3, 1, 17);
+    fillRect(x + 17, y + 3, 1, 17);
+    fillRect(x, y + 8, 18, 1);
+    fillRect(x + 4, y, 2, 6);
+    fillRect(x + 12, y, 2, 6);
+    fillRect(x + 5, y + 12, 3, 3);
+    fillRect(x + 11, y + 12, 3, 3);
+  }
+  function sectionChecklist(x, y) {
+    for (let i = 0; i < 2; i++) {
+      const yy = y + i * 11;
+      fillRect(x, yy, 9, 1);
+      fillRect(x, yy + 8, 9, 1);
+      fillRect(x, yy, 1, 9);
+      fillRect(x + 8, yy, 1, 9);
+      fillRect(x + 13, yy + 3, 15, 1);
+    }
+  }
+  function dailyBusyScale(blocks) {
+    const bx = 226, by = DASHBOARD_LAYOUT.eventHeadingY + 17, bw = 270;
+    // Thin 24-hour scale within the original heading height.
+    fillRect(bx, by, bw, 1);
+    for (const hour of [0, 6, 12, 18, 24])
+      fillRect(bx + Math.round(bw * hour / 24), by - 3, 1, 7);
+    for (const block of blocks) {
+      const start = Math.max(0, Math.min(1440, block.start));
+      const end = Math.max(0, Math.min(1440, block.end));
+      if (end <= start) continue;
+      const left = bx + Math.floor(bw * start / 1440);
+      const right = bx + Math.ceil(bw * end / 1440);
+      fillRect(left, by - 3, Math.max(2, right - left), 7);
+    }
+    write('00', bx - 2, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
+    write('12', bx + bw / 2 - 7, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
+    write('24', bx + bw - 14, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
+  }
   function rule(y) { fillRect(28, y, 472, 2); }
   function write(value, x, y, role, width = DASHBOARD_WIDTH - x - 25) {
     const face = faceFor(data, role);
@@ -519,7 +558,17 @@ export function renderDashboardBmp(data, options = {}) {
   }
   rule(DASHBOARD_LAYOUT.dateRuleY);
 
-  write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, DASHBOARD_LAYOUT.eventHeadingY, 'heading');
+  sectionCalendar(29, DASHBOARD_LAYOUT.eventHeadingY + 1);
+  write(ru ? 'ПЛАН' : 'AGENDA', 55, DASHBOARD_LAYOUT.eventHeadingY + 4, 'heading', 110);
+  const blocks = data.busyIntervals?.length ? data.busyIntervals : data.events
+    .filter(event => event.time && event.durationMinutes > 0)
+    .map(event => {
+      const m = /^(\\d{1,2}):(\\d{2})$/.exec(event.time);
+      if (!m) return null;
+      const start = Number(m[1]) * 60 + Number(m[2]);
+      return { start, end: Math.min(1440, start + event.durationMinutes) };
+    }).filter(Boolean);
+  dailyBusyScale(blocks);
   for (const row of layout.events) {
     const { event, y, lines, titleWidth, duration, durationWidth } = row;
     const badge = DASHBOARD_CALENDAR_CATEGORIES[event.calendar] || '';
@@ -546,7 +595,16 @@ export function renderDashboardBmp(data, options = {}) {
   }
 
   rule(layout.taskHeadingY - 17);
-  write(ru ? 'ЗАДАЧИ' : 'TASKS', 28, layout.taskHeadingY, 'heading');
+  sectionChecklist(29, layout.taskHeadingY + 1);
+  write(ru ? 'ДЕЛА' : 'TO DO', 65, layout.taskHeadingY + 4, 'heading', 110);
+  const overdueCount = Number.isInteger(data.tasksOverdueCount)
+    ? data.tasksOverdueCount : data.tasks.filter(task => task.overdue).length;
+  if (overdueCount > 0) {
+    const text = overdueCount + (ru ? ' просрочено' : ' overdue');
+    const face = faceFor(data, 'footer');
+    const width = textWidth(text, face);
+    write(text, 500 - width, layout.taskHeadingY + 7, 'footer', width + 1);
+  }
   for (const row of layout.tasks) {
     const { task, y, lines } = row;
     if (task.done) fillRect(30, y + 7, 14, 14);
