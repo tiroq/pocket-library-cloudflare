@@ -126,15 +126,19 @@ See [context-aware setup](docs/calendar-dashboard.md#context-aware-dashboard-wee
 ## Compact agenda summary: time, tasks and links
 
 The dashboard uses small calendar/checklist section icons with short
-`ПЛАН` / `ДЕЛА` captions. A thin 24-hour busy timeline appears to the
-right of `ПЛАН`, while `ДЕЛА` shows the collected overdue task count.
+`ПЛАН` / `ДЕЛА` captions. A focused busy timeline appears to the
+right of `ПЛАН` (e.g. **06–18** around 07:00–17:00 events; single/empty
+days use **07–22**), while `ДЕЛА` shows the overdue task count.
+When only the next two-line task is too tall for the remaining space,
+the last row can render as a one-line ellipsis so it still fits above
+the footer, with the hidden-task counter preserved.
 URLs inside task and event names render as short domain/path labels
 instead of long tracking links, without editing Google data.
 
 For the **complete day** occupancy timeline and overdue counts beyond
 the first 20 tasks, update the optional Apps Script to send
 `busyIntervals` and `tasksOverdueCount`. See
-[calendar display documentation](docs/calendar-dashboard.md#compact-agenda-headers-links-and-24-hour-occupancy).
+[calendar display documentation](docs/calendar-dashboard.md#compact-agenda-headers-links-and-focused-daily-occupancy).
 
 ## Adaptive X3 agenda layout
 
