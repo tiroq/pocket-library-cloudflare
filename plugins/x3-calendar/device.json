@@ -1,0 +1,18 @@
+{
+  "title": "X3 Calendar",
+  "description": "Refresh calendar sleep image from Pocket Library on sleep",
+  "config": {
+    "file": "config.json"
+  },
+  "events": {
+    "sleep.enter": {
+      "download": {
+        "url": "https://books.tiroq.dev/dashboard-1bit.bmp",
+        "headers": {
+          "Authorization": "{cfg.authorization}"
+        },
+        "dest": "/sleep.bmp"
+      }
+    }
+  }
+}
