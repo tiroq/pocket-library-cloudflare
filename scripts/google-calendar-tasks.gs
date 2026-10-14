@@ -9,7 +9,8 @@
  * Before running:
  * 1. In script.google.com enable Services → Tasks API (Advanced Service).
  * 2. In Project Settings → Script Properties, configure POCKET_UPLOAD_TOKEN.
- * 3. Optionally set CALENDAR_IDS (comma-separated, defaults to primary only),
+ * 3. Set FAMILY_CALENDAR_ID to include and mark a shared family calendar.
+ *    Optionally set CALENDAR_IDS (comma-separated, defaults to primary),
  *    DASHBOARD_FONT (golos-text/inter/ibm-plex-sans/onest), and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
  * 4. Set Apps Script timezone to your actual local timezone.
@@ -34,14 +35,27 @@ function syncX3Dashboard() {
   // CalendarApp resolves the day's boundaries in the selected calendar's
   // own timezone, avoiding ambiguous parsing of timezone-less date strings.
 
+  // When configured, the shared family calendar is *added* to existing
+  // calendars; FAMILY_CALENDAR_ID alone is enough for primary + family.
+  // CALENDAR_IDS remains available for additional calendars/legacy setups.
+  const familyCalendarId = String(properties.getProperty('FAMILY_CALENDAR_ID') || '').trim();
   const calendarIds = String(properties.getProperty('CALENDAR_IDS') || '').split(',')
     .map(id => id.trim()).filter(Boolean);
-  const calendars = calendarIds.length
-    ? calendarIds.map(id => CalendarApp.getCalendarById(id)).filter(Boolean)
-    : [CalendarApp.getDefaultCalendar()];
+  const entries = calendarIds.length
+    ? [...new Set(calendarIds)].map(id => ({ id, calendar: CalendarApp.getCalendarById(id) }))
+    : (() => {
+        const primary = CalendarApp.getDefaultCalendar();
+        return [{ id: primary.getId(), calendar: primary }];
+      })();
+  if (familyCalendarId && !entries.some(entry => entry.id === familyCalendarId)) {
+    entries.push({ id: familyCalendarId, calendar: CalendarApp.getCalendarById(familyCalendarId) });
+  }
+  if (familyCalendarId && entries.some(entry => entry.id === familyCalendarId && !entry.calendar)) {
+    throw new Error('FAMILY_CALENDAR_ID is not accessible. Check the exact Google Calendar ID and sharing.');
+  }
 
   const events = [];
-  calendars.forEach(calendar => {
+  entries.filter(entry => entry.calendar).forEach(({ id, calendar }) => {
     calendar.getEventsForDay(now).forEach(event => {
       if (!event.getTitle()) return;
       const allDay = event.isAllDayEvent();
@@ -52,6 +66,8 @@ function syncX3Dashboard() {
         time: allDay ? '' : Utilities.formatDate(start, timezone, 'HH:mm'),
         title: event.getTitle(),
       };
+      // Render the tiny F marker in the existing gap between time and title.
+      if (familyCalendarId && id === familyCalendarId) item.calendar = 'family';
       if (!allDay && durationMinutes > 0 && durationMinutes <= 10080) {
         item.durationMinutes = durationMinutes;
       }
