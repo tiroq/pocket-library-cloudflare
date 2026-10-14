@@ -175,6 +175,25 @@ duration labels keep their original horizontal positions. The 24-bit and
 1-bit BMP outputs remain pixel-equivalent. Counts refer to records in the
 posted JSON (currently capped at **20 events and 20 tasks**).
 
+### Emoji-safe title normalization and task density
+
+Every incoming event and task title is normalized **on the Worker** before
+width measurement, line wrapping or writing the image. Unsupported emoji,
+emoji modifiers, zero-width joiners and regional-flag symbols are removed;
+the leftover Unicode whitespace is collapsed to a single space and trimmed.
+Example: `🎾   Теннис — тренировка` becomes `Теннис — тренировка`, with no
+leading `?` glyph or extra blank indent. Real question marks (e.g.
+`Уточнить?`) and Cyrillic are preserved. This also fixes already-running
+Google Apps Script and older iPhone Shortcuts — neither needs an edit.
+
+The task row spacing is reduced only where there was redundant vertical
+padding. Two-line task text retains its original **28px baseline spacing**,
+and font sizes, checkbox position, footer and calendar priorities are
+unchanged. The heading-to-task gap and `+N ещё` reservation are tighter, so
+a day with six visible events and a mixture of short/long tasks can show
+at least one more task instead of leaving unusable space above the footer.
+Overflow counts always reflect what was actually rendered.
+
 ## Duration + Google Tasks
 
 The optional `durationMinutes` integer in each `events` record is rendered
