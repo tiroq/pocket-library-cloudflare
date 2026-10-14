@@ -306,10 +306,10 @@ export function renderDashboardBmp(data, options = {}) {
   }
   const layout = planDashboardLayout(data);
   // The date and footer are fixed anchors; everything between adapts.
-  const weather = data.weather || '';
   const weatherFace = faceFor(data, 'heading');
+  const weather = data.weather ? ellipsize(data.weather, weatherFace, 162) : '';
   const weatherWidth = weather ? Math.ceil(textWidth(weather, weatherFace)) : 0;
-  const dateWidth = weather ? Math.max(225, 472 - weatherWidth - 14) : 472;
+  const dateWidth = weather ? 472 - weatherWidth - 14 : 472;
   write(data.date, 28, 24, 'date', dateWidth);
   if (weather) {
     write(weather, 500 - weatherWidth, 45, 'heading', weatherWidth + 1);
