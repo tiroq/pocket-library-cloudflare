@@ -166,3 +166,140 @@ test('inaccessible configured family calendar fails loudly, not silently', () =>
   script.runInNewContext(ctx);
   assert.throws(() => ctx.syncX3Dashboard(), /FAMILY_CALENDAR_ID is not accessible/);
 });
+
+function setupMultiCalendarSources(sourceConfig, extraProperties = {}) {
+  const posts = [];
+  const reads = [];
+  const timed = (name, hour, uid, minutes = 30) => ({
+    getTitle: () => name,
+    isAllDayEvent: () => false,
+    getStartTime: () => new Date('2026-10-14T' + String(hour).padStart(2,'0') + ':00:00Z'),
+    getEndTime: () => new Date(Date.parse('2026-10-14T' + String(hour).padStart(2,'0') + ':00:00Z') + minutes * 60000),
+    getId: () => uid
+  });
+  const sources = {
+    'private@gmail.com': [timed('Личное', 2, 'personal-uid'), timed('Дубликат созвона', 4, 'shared-uid')],
+    'family@group.calendar.google.com': [timed('Школа', 3, 'family-uid')],
+    'friends@group.calendar.google.com': [timed('Встреча с друзьями', 5, 'friends-uid')],
+    'work@company.com': [timed('Дубликат созвона', 4, 'shared-uid'), timed('Работа', 6, 'work-uid')],
+  };
+  const primary = 'private@gmail.com';
+  const getCal = id => sources[id] && {
+    getId: () => id,
+    getEventsForDay: () => {
+      reads.push(id);
+      return sources[id];
+    }
+  };
+  const values = {
+    POCKET_UPLOAD_TOKEN: 'test-token',
+    ...(sourceConfig === undefined ? {} : { CALENDAR_SOURCES: sourceConfig }),
+    ...extraProperties
+  };
+  const ctx = {
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: key => values[key] ?? null
+    }) },
+    Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
+    Utilities: { formatDate: (_date, _zone, fmt) => ({
+      'yyyy-MM-dd': '2026-10-14',
+      'dd.MM.yyyy': '14.10.2026',
+      'HH:mm': '09:00'
+    })[fmt] },
+    CalendarApp: {
+      getDefaultCalendar: () => getCal(primary),
+      getCalendarById: getCal,
+      getAllCalendars: () => Object.keys(sources).map(getCal)
+    },
+    Tasks: {
+      Tasklists: { list: () => ({ items: [] }) },
+      Tasks: { list: () => ({ items: [] }) }
+    },
+    UrlFetchApp: { fetch: (_url, args) => {
+      posts.push(JSON.parse(args.payload));
+      return { getResponseCode: () => 200 };
+    } },
+    console: { log: () => {} },
+    Date, JSON, Set, Map
+  };
+  script.runInNewContext(ctx);
+  return { ctx, posts, reads };
+}
+
+test('CALENDAR_SOURCES merges four categories, disables sources and deduplicates true invitations', () => {
+  const config = JSON.stringify([
+    { id: 'primary', category: 'personal', enabled: true, label: 'P' },
+    { id: 'family@group.calendar.google.com', category: 'family' },
+    { id: 'friends@group.calendar.google.com', category: 'shared', enabled: true },
+    { id: 'work@company.com', category: 'work', enabled: true, label: 'W' },
+    { id: 'unknown@example.com', category: 'work', enabled: false }
+  ]);
+  const { ctx, posts, reads } = setupMultiCalendarSources(config, {
+    FAMILY_CALENDAR_ID: 'unknown-legacy@example.com',
+    CALENDAR_IDS: 'unknown-legacy@example.com'
+  });
+  ctx.syncX3Dashboard();
+  assert.deepEqual(reads, [
+    'private@gmail.com', 'family@group.calendar.google.com',
+    'friends@group.calendar.google.com', 'work@company.com'
+  ]);
+  assert.equal(posts.length, 1);
+  const items = posts[0].events;
+  assert.deepEqual(items.map(item => [item.title, item.calendar, item.durationMinutes]), [
+    ['Личное', 'personal', 30],
+    ['Школа', 'family', 30],
+    ['Дубликат созвона', 'work', 30],
+    ['Встреча с друзьями', 'shared', 30],
+    ['Работа', 'work', 30]
+  ]);
+});
+
+test('CALENDAR_SOURCES supports hiding personal marker and dedups calendar IDs', () => {
+  const config = JSON.stringify([
+    { id: 'primary', category: 'personal', showBadge: false },
+    { id: 'private@gmail.com', category: 'personal', showBadge: false },
+    { id: 'family@group.calendar.google.com', category: 'family' }
+  ]);
+  const { ctx, posts, reads } = setupMultiCalendarSources(config);
+  ctx.syncX3Dashboard();
+  assert.deepEqual(reads, ['private@gmail.com', 'family@group.calendar.google.com']);
+  assert.equal(posts[0].events[0].calendar, undefined);
+  assert.equal(posts[0].events.filter(item => item.calendar === 'family').length, 1);
+});
+
+test('CALENDAR_SOURCES rejects malformed or inaccessible entries instead of silently dropping', () => {
+  const configs = [
+    '{broken',
+    JSON.stringify({ id: 'primary', category: 'personal' }),
+    JSON.stringify([{ id: 'primary', category: 'unknown' }]),
+    JSON.stringify([{ id: 'primary', category: 'family', enabled: 'yes' }]),
+    JSON.stringify([{ id: 'primary', category: 'personal', label: 'W' }]),
+    JSON.stringify([{ id: 'primary', category: 'personal', showBadge: 'no' }]),
+    JSON.stringify([{ id: 'not-shared@gmail.com', category: 'work' }]),
+    JSON.stringify([
+      { id: 'primary', category: 'personal' },
+      { id: 'private@gmail.com', category: 'work' }
+    ])
+  ];
+  for (const config of configs) {
+    const { ctx, posts } = setupMultiCalendarSources(config);
+    assert.throws(() => ctx.syncX3Dashboard(), /CALENDAR_SOURCES|Calendar source|Duplicate calendar ID/);
+    assert.equal(posts.length, 0, 'never publish incomplete snapshots');
+  }
+});
+
+test('old CALENDAR_IDS + FAMILY_CALENDAR_ID and primary-only behavior remain unchanged', () => {
+  const old = setupMultiCalendarSources(undefined, {
+    CALENDAR_IDS: 'private@gmail.com,family@group.calendar.google.com',
+    FAMILY_CALENDAR_ID: 'family@group.calendar.google.com'
+  });
+  old.ctx.syncX3Dashboard();
+  assert.equal(old.posts[0].events[0].calendar, undefined);
+  assert.equal(old.posts[0].events.find(e => e.title === 'Школа').calendar, 'family');
+  assert.equal(old.reads.length, 2);
+
+  const primaryOnly = setupMultiCalendarSources();
+  primaryOnly.ctx.syncX3Dashboard();
+  assert.deepEqual(primaryOnly.reads, ['private@gmail.com']);
+  assert.ok(primaryOnly.posts[0].events.every(item => !item.calendar));
+});

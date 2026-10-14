@@ -2,6 +2,15 @@
 
 This feature is an **addition** to the existing Pocket Library Worker. Existing OPDS and book synchronization are unchanged.
 
+## Multiple Google Calendar sources
+
+The recommended Apps Script setting is `CALENDAR_SOURCES`: assign individual
+personal/family/shared/work categories and the Worker renders tiny **P/F/S/W**
+badges in the existing time/title gap, with no changes to the X3 plugin.
+It preserves the older Family-only mode when the new setting is absent.
+
+See [Calendar sources: personal, family, shared, work](calendar-sources.md).
+
 ## Shared family Google Calendar
 
 Events from a shared Family calendar can be merged with the primary calendar

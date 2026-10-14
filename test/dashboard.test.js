@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import app from '../src/index.js';
-import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText, normalizeDurationMinutes, formatEventDuration } from '../src/dashboard.js';
+import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText, normalizeDurationMinutes, formatEventDuration, DASHBOARD_CALENDAR_CATEGORIES } from '../src/dashboard.js';
 
 class MemoryR2 {
   constructor() { this.objects = new Map(); }
@@ -132,6 +132,42 @@ test('duration badges change both BMP versions with no change to date or unsuppo
   }
 });
 
+test('all four calendar categories render distinct compact badges without shifting text', () => {
+  assert.deepEqual(DASHBOARD_CALENDAR_CATEGORIES, {
+    personal: 'P', family: 'F', shared: 'S', work: 'W'
+  });
+  for (const font of DASHBOARD_FONTS) {
+    const basic = {
+      ...example, font,
+      events: [{ time: '09:30', title: 'Проектная встреча с длинным названием', durationMinutes: 90 }]
+    };
+    const plain = renderDashboardBmp(normalizeDashboard(basic));
+    const hashes = new Set();
+    for (const category of ['personal', 'family', 'shared', 'work']) {
+      const input = { ...basic,
+        events: [{ ...basic.events[0], calendar: category }] };
+      const normalized = normalizeDashboard(input);
+      assert.equal(normalized.events[0].calendar, category);
+      const rendered = renderDashboardBmp(normalized);
+      let pixelsDifferent = 0;
+      for (let y = 0; y < DASHBOARD_HEIGHT; y++) {
+        const row = 54 + (DASHBOARD_HEIGHT - 1 - y) * DASHBOARD_WIDTH * 3;
+        for (let x = 0; x < DASHBOARD_WIDTH; x++) {
+          if (plain[row + x * 3] === rendered[row + x * 3]) continue;
+          pixelsDifferent++;
+          assert.ok(x >= 119 && x <= 137 && y >= 174 && y < 195,
+            font + '/' + category + ' moved content pixel at ' + x + ',' + y);
+        }
+      }
+      assert.ok(pixelsDifferent > 12);
+      hashes.add(createHash('sha256').update(rendered).digest('hex'));
+      const mono = convertDashboardBmpTo1Bit(rendered);
+      assert.ok(mono.length < 1024 * 1024);
+    }
+    assert.equal(hashes.size, 4, font + ' badges need distinct glyphs');
+  }
+});
+
 test('family marker never shifts time, title or duration even with Cyrillic and four fonts', () => {
   for (const font of DASHBOARD_FONTS) {
     const input = {
@@ -183,10 +219,15 @@ test('family calendar metadata persists in dashboard JSON, rejects unsupported t
   const invalid = normalizeDashboard.bind(null, {
     ...example, events: [{ time: '12:00', title: 'Unknown', calendar: 'surprise' }]
   });
-  assert.throws(invalid, /calendar must be primary or family/);
+  assert.throws(invalid, /calendar must be personal, family, shared, work or primary/);
   assert.equal(normalizeDashboard({
     ...example, events: [{ time: '12:00', title: 'Work', calendar: 'primary' }]
   }).events[0].calendar, undefined);
+  for (const category of ['personal', 'family', 'shared', 'work']) {
+    assert.equal(normalizeDashboard({
+      ...example, events: [{ time: '12:00', title: 'Tagged', calendar: category }]
+    }).events[0].calendar, category);
+  }
 });
 
 test('dashboard schema validation and Unicode', () => {
