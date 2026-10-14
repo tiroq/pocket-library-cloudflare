@@ -17,7 +17,7 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
   const context = {
     PropertiesService: {
       getScriptProperties: () => ({ getProperty: k => ({
-        POCKET_UPLOAD_TOKEN: 'test-token', DASHBOARD_FONT: 'golos-text'
+        POCKET_UPLOAD_TOKEN: 'test-token', DASHBOARD_FONT: 'golos-text', EVENTS_MODE: 'all'
       })[k] })
     },
     Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
@@ -62,9 +62,9 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
   assert.equal(calls[0].options.headers.Authorization, 'Bearer test-token');
   const payload = JSON.parse(calls[0].options.payload);
   assert.equal(payload.events[0].durationMinutes, 90);
-  assert.deepEqual(payload.tasks.map(t => t.title), ['Купить продукты', 'Просроченная задача']);
+  assert.deepEqual(payload.tasks.map(t => t.title), ['Просроченная задача', 'Купить продукты']);
   assert.equal(payload.tasks.some(t => t.title === 'Готово'), false);
-  assert.equal(payload.date, '14.10.2026');
+  assert.equal(payload.date, 'СР · 14.10.2026');
   assert.equal(payload.font, 'golos-text');
 });
 
@@ -95,6 +95,7 @@ test('shared family calendar is added to primary and its events receive F marker
       getScriptProperties: () => ({
         getProperty: k => ({
           POCKET_UPLOAD_TOKEN: 'test-token',
+          EVENTS_MODE: 'all',
           FAMILY_CALENDAR_ID: 'family-id',
           CALENDAR_IDS: calendarIds
         })[k]
@@ -193,6 +194,7 @@ function setupMultiCalendarSources(sourceConfig, extraProperties = {}) {
   };
   const values = {
     POCKET_UPLOAD_TOKEN: 'test-token',
+    EVENTS_MODE: 'all',
     ...(sourceConfig === undefined ? {} : { CALENDAR_SOURCES: sourceConfig }),
     ...extraProperties
   };
@@ -405,6 +407,7 @@ test('work calendar with CalendarApp blank title is still represented as busy', 
   const ctx = {
     PropertiesService: { getScriptProperties: () => ({
       getProperty: key => key === 'POCKET_UPLOAD_TOKEN' ? 'token'
+        : key === 'EVENTS_MODE' ? 'all'
         : key === 'CALENDAR_SOURCES'
           ? JSON.stringify([{ id: 'work@example.com', category: 'work' }]) : ''
     }) },
@@ -472,4 +475,88 @@ test('FreeBusy ignores untrusted machine reasons in Google error response', () =
     assert.doesNotMatch(error.message, /secret-work/);
     return true;
   });
+});
+
+test('remaining event mode hides completed while retaining ongoing and future events', () => {
+  class FakeDate extends Date {
+    constructor(...args) { super(...(args.length ? args : ['2026-10-14T04:00:00Z'])); }
+    static now() { return Date.parse('2026-10-14T04:00:00Z'); }
+  }
+  const { ctx, posts } = setupMultiCalendarSources(JSON.stringify([
+    { id: 'primary', category: 'personal' },
+    { id: 'family@group.calendar.google.com', category: 'family' },
+    { id: 'friends@group.calendar.google.com', category: 'shared' },
+    { id: 'work@company.com', category: 'work' }
+  ]), { EVENTS_MODE: 'remaining' });
+  ctx.Date = FakeDate;
+  ctx.syncX3Dashboard();
+  assert.deepEqual(posts[0].events.map(e => e.title), [
+    'Дубликат созвона', 'Встреча с друзьями', 'Работа'
+  ]);
+  assert.equal(posts[0].events[0].calendar, 'work');
+  assert.match(posts[0].date, /^СР · 14\.10\.2026$/);
+});
+
+test('weekday header styles can be short, full or absent', () => {
+  const { ctx } = setupMultiCalendarSources();
+  assert.equal(ctx.getX3Weekday('2026-10-14', 'short'), 'СР · ');
+  assert.equal(ctx.getX3Weekday('2026-10-14', 'full'), 'СРЕДА · ');
+  assert.equal(ctx.getX3Weekday('2026-10-14', 'none'), '');
+  assert.throws(() => ctx.getX3Weekday('2026-10-14', 'unknown'), /WEEKDAY_STYLE/);
+});
+
+test('priority sorts overdue before today and undated before 20-task cap', () => {
+  const { ctx, posts } = setupMultiCalendarSources(JSON.stringify([
+    { id: 'primary', category: 'personal' }
+  ]), { EVENTS_MODE: 'all', INCLUDE_UNDATED_TASKS: 'true' });
+  ctx.Tasks = {
+    Tasklists: { list: () => ({ items: [{ id: 'a' }, { id: 'b' }] }) },
+    Tasks: { list: id => ({ items: id === 'a'
+      ? Array.from({ length: 40 }, (_, i) =>
+        ({ title: 'Без даты ' + i, status: 'needsAction' }))
+      : [{ title: 'Срочно, просрочено', due: '2026-10-10T00:00:00.000Z', status: 'needsAction' },
+         { title: 'Сегодня', due: '2026-10-14T00:00:00.000Z', status: 'needsAction' }] }) }
+  };
+  ctx.syncX3Dashboard();
+  // Include 40 undated tasks to guarantee the old 20-item pre-cap would miss
+  // due/overdue tasks located in a later list.
+  assert.equal(posts[0].tasks.length, 20);
+  assert.equal(posts[0].tasks[0].title, 'Срочно, просрочено');
+  assert.equal(posts[0].tasks[0].overdue, true);
+  assert.equal(posts[0].tasks[1].title, 'Сегодня');
+  assert.equal(posts[0].tasks[1].overdue, undefined);
+});
+
+test('compact weather is optional, configurable and fails open on API outages', () => {
+  const setup = () => setupMultiCalendarSources(JSON.stringify([
+    { id: 'primary', category: 'personal' }
+  ]), { WEATHER_LAT: '12.55', WEATHER_LON: '99.96' });
+  const { ctx, posts } = setup();
+  const original = ctx.UrlFetchApp.fetch;
+  let weatherCalls = 0;
+  ctx.UrlFetchApp.fetch = (url, options) => {
+    if (url.startsWith('https://api.open-meteo.com/')) {
+      weatherCalls++;
+      assert.match(url, /latitude=12.55/);
+      assert.match(url, /longitude=99.96/);
+      return { getResponseCode: () => 200, getContentText: () =>
+        JSON.stringify({ current: { temperature_2m: 30.4, weather_code: 61 } }) };
+    }
+    return original(url, options);
+  };
+  ctx.syncX3Dashboard();
+  assert.equal(weatherCalls, 1);
+  assert.equal(posts[0].weather, '30° Дождь');
+
+  const outage = setup();
+  const oldFetch = outage.ctx.UrlFetchApp.fetch;
+  outage.ctx.UrlFetchApp.fetch = (url, options) => url.startsWith('https://api.open-meteo.com/')
+    ? { getResponseCode: () => 503 }
+    : oldFetch(url, options);
+  outage.ctx.syncX3Dashboard();
+  assert.equal(outage.posts[0].weather, '');
+
+  const invalid = setupMultiCalendarSources(undefined, { WEATHER_LAT: 'hello', WEATHER_LON: '99.96' });
+  assert.throws(() => invalid.ctx.syncX3Dashboard(), /Invalid WEATHER_LAT/);
+  assert.equal(invalid.posts.length, 0);
 });

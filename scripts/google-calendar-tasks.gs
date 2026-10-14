@@ -17,6 +17,8 @@
  *    Existing FAMILY_CALENDAR_ID and CALENDAR_IDS continue working when
  *    CALENDAR_SOURCES is absent. Also supports DASHBOARD_FONT and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
+ *    EVENTS_MODE=remaining|all, WEEKDAY_STYLE=short|full|none,
+ *    TASK_SORT=due|original; optional WEATHER_LAT and WEATHER_LON.
  * 4. Set Apps Script timezone to your actual local timezone.
  * 5. Run syncX3Dashboard manually to grant OAuth permissions, then schedule
  *    a time-driven trigger if desired.
@@ -197,10 +199,66 @@ function getX3FreeBusyIntervals(entries, now, timezone) {
       };
       if (entry.category && entry.showBadge) item.calendar = entry.category;
       if (durationMinutes > 0 && durationMinutes <= 10080) item.durationMinutes = durationMinutes;
-      intervals.push({ startMillis, item, category: entry.category });
+      intervals.push({ startMillis, endMillis, item, category: entry.category });
     }
   }
   return intervals;
+}
+
+/**
+ * Optional compact current weather, without GPS permissions or API keys.
+ * Location is configured by Script Properties WEATHER_LAT / WEATHER_LON.
+ * A broken external weather API should never block calendar synchronization.
+ */
+function getX3Weather(properties) {
+  const latText = String(properties.getProperty('WEATHER_LAT') || '').trim();
+  const lonText = String(properties.getProperty('WEATHER_LON') || '').trim();
+  if (!latText && !lonText) return '';
+  if (!latText || !lonText) throw new Error('Set both WEATHER_LAT and WEATHER_LON');
+  const lat = Number(latText), lon = Number(lonText);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) ||
+      lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    throw new Error('Invalid WEATHER_LAT / WEATHER_LON');
+  }
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast?latitude=' +
+      encodeURIComponent(lat) + '&longitude=' + encodeURIComponent(lon) +
+      '&current=temperature_2m,weather_code';
+    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (response.getResponseCode() !== 200) {
+      console.log('Weather API temporarily unavailable, HTTP ' + response.getResponseCode());
+      return '';
+    }
+    const current = JSON.parse(response.getContentText()).current;
+    if (!current || !Number.isFinite(current.temperature_2m) ||
+        !Number.isFinite(current.weather_code)) return '';
+    const code = current.weather_code;
+    const label = code === 0 ? 'Ясно'
+      : code <= 2 ? 'Перем.'
+      : code === 3 ? 'Обл.'
+      : code <= 48 ? 'Туман'
+      : code <= 67 ? 'Дождь'
+      : code <= 77 ? 'Снег'
+      : code <= 82 ? 'Ливень'
+      : code <= 86 ? 'Снег'
+      : 'Гроза';
+    return Math.round(current.temperature_2m) + '° ' + label;
+  } catch {
+    console.log('Weather temporarily unavailable');
+    return '';
+  }
+}
+
+function getX3Weekday(dateKey, style) {
+  if (style === 'none') return '';
+  if (style !== 'short' && style !== 'full') {
+    throw new Error('WEEKDAY_STYLE must be short, full or none');
+  }
+  const dow = new Date(dateKey + 'T12:00:00Z').getUTCDay();
+  const weekdays = style === 'full'
+    ? ['ВОСКРЕСЕНЬЕ', 'ПОНЕДЕЛЬНИК', 'ВТОРНИК', 'СРЕДА', 'ЧЕТВЕРГ', 'ПЯТНИЦА', 'СУББОТА']
+    : ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
+  return weekdays[dow] + ' · ';
 }
 
 function syncX3Dashboard() {
@@ -211,6 +269,15 @@ function syncX3Dashboard() {
   const timezone = Session.getScriptTimeZone();
   const now = new Date();
   const dateKey = Utilities.formatDate(now, timezone, 'yyyy-MM-dd');
+  const eventsMode = String(properties.getProperty('EVENTS_MODE') || 'remaining').trim().toLowerCase();
+  if (!['all', 'remaining'].includes(eventsMode)) {
+    throw new Error('EVENTS_MODE must be remaining or all');
+  }
+  const weekdayStyle = String(properties.getProperty('WEEKDAY_STYLE') || 'short').trim().toLowerCase();
+  const taskSort = String(properties.getProperty('TASK_SORT') || 'due').trim().toLowerCase();
+  if (!['due', 'original'].includes(taskSort)) {
+    throw new Error('TASK_SORT must be due or original');
+  }
   // CalendarApp resolves the day's boundaries in the selected calendar's
   // own timezone, avoiding ambiguous parsing of timezone-less date strings.
 
@@ -249,20 +316,26 @@ function syncX3Dashboard() {
         if ((priority[category] || 0) > (priority[existing.category] || 0)) {
           existing.item = item;
           existing.category = category;
+          existing.endMillis = end.getTime();
         }
         return;
       }
       if (key) byOccurrence.set(key, events.length);
-      events.push({ startMillis, item, category });
+      events.push({ startMillis, endMillis: end.getTime(), item, category });
     });
   });
-  events.sort((a, b) => a.startMillis - b.startMillis);
-  const orderedEvents = events.slice(0, X3_MAX_EVENTS).map(item => item.item);
+  // Filter by END, not start: an ongoing event remains visible.
+  // The FreeBusy query clips today's interval, so end is start + duration.
+  const remainingEvents = eventsMode === 'all' ? events : events.filter(entry =>
+    (entry.endMillis || (entry.startMillis + (entry.item.durationMinutes || 0) * 60000)) > now.getTime());
+  remainingEvents.sort((a, b) => a.startMillis - b.startMillis);
+  const orderedEvents = remainingEvents.slice(0, X3_MAX_EVENTS).map(entry => entry.item);
 
   // These are Google TASKS, not CalendarApp events or Apple Reminders.
   // List across all Google Task lists and include today's + overdue tasks.
   const includeUndated = properties.getProperty('INCLUDE_UNDATED_TASKS') === 'true';
   const tasks = [];
+  const MAX_TASK_CANDIDATES = 500;
   let listsPage;
   do {
     const page = Tasks.Tasklists.list({ maxResults: 100, pageToken: listsPage });
@@ -280,25 +353,38 @@ function syncX3Dashboard() {
           const due = task.due ? task.due.slice(0, 10) : null;
           if (!due && !includeUndated) continue;
           if (due && due > dateKey) continue;
-          tasks.push({ title: task.title, done: false, due: due || '' });
-          if (tasks.length >= X3_MAX_TASKS) break;
+          tasks.push({ title: task.title, done: false, due: due || '',
+            overdue: Boolean(due && due < dateKey) });
+          if (tasks.length >= MAX_TASK_CANDIDATES) break;
         }
-        if (tasks.length >= X3_MAX_TASKS) break;
+        if (tasks.length >= MAX_TASK_CANDIDATES) break;
         pageToken = response.nextPageToken;
       } while (pageToken);
-      if (tasks.length >= X3_MAX_TASKS) break;
+      if (tasks.length >= MAX_TASK_CANDIDATES) break;
     }
-    if (tasks.length >= X3_MAX_TASKS) break;
+    if (tasks.length >= MAX_TASK_CANDIDATES) break;
     listsPage = page.nextPageToken;
   } while (listsPage);
+
+  // Google Tasks order differs between task lists. Sort BEFORE the 20-task
+  // display cap so due/overdue items never disappear behind unrelated lists.
+  if (taskSort === 'due') {
+    tasks.sort((a, b) => {
+      const aRank = a.due ? (a.overdue ? 0 : 1) : 2;
+      const bRank = b.due ? (b.overdue ? 0 : 1) : 2;
+      return aRank - bRank || (a.due || '').localeCompare(b.due || '');
+    });
+  }
 
   const dashboard = {
     locale: 'ru',
     font: properties.getProperty('DASHBOARD_FONT') || 'golos-text',
-    date: Utilities.formatDate(now, timezone, 'dd.MM.yyyy'),
+    date: getX3Weekday(dateKey, weekdayStyle) + Utilities.formatDate(now, timezone, 'dd.MM.yyyy'),
+    weather: getX3Weather(properties),
     updated: Utilities.formatDate(now, timezone, 'HH:mm'),
     events: orderedEvents,
-    tasks: tasks.map(task => ({ title: task.title, done: task.done })),
+    tasks: tasks.slice(0, X3_MAX_TASKS).map(task => ({ title: task.title, done: task.done,
+      ...(task.overdue ? { overdue: true } : {}) })),
     note: '',
   };
 

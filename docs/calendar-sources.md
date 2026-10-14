@@ -6,6 +6,8 @@ the private Cloudflare Worker. The Worker displays tiny **P/F/S/W** badges
 between time and title, without shifting title, duration or task positions.
 Google Tasks are still included in the same upload.
 
+See [context-aware dashboard setup](calendar-dashboard.md#context-aware-dashboard-weekday-weather-remaining-events-and-task-urgency) for weekday/weather/remaining-event and task urgency options, as well as Cloudflare freshness Cron.
+
 ## One property controls all calendar sources
 
 In Apps Script → **Project Settings → Script Properties**, add a property

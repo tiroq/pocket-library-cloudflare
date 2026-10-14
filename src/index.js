@@ -89,6 +89,37 @@ async function updateDashboard(req, env) {
   return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', sleepImageUrl: '/dashboard-1bit.bmp', width: 528, height: 792,
     updatedAt: data.generatedAt, font: data.font, events: data.events.length, tasks: data.tasks.length });
 }
+// Cron marks a *previously uploaded image* stale even when Google Apps Script
+// fails and therefore never sends a fresh payload. It cannot repaint a sleeping
+// X3 until the device downloads this newer image.
+export function dashboardStaleMinutes(env) {
+  const n = Number(env.DASHBOARD_STALE_MINUTES ?? 45);
+  return Number.isInteger(n) && n >= 15 && n <= 1440 ? n : 45;
+}
+
+export async function refreshDashboardFreshness(env, now = new Date()) {
+  if (!env.BOOKS_BUCKET) return false;
+  const object = await env.BOOKS_BUCKET.get('dashboard/current.json');
+  if (!object) return false; // No dashboard has been uploaded yet.
+  const json = typeof object.text === 'function'
+    ? await object.text() : new TextDecoder().decode(object.body);
+  const data = JSON.parse(json); // Already validated on trusted POST /api/dashboard
+  const uploaded = Date.parse(data.generatedAt);
+  if (!Number.isFinite(uploaded)) return false;
+  const staleMinutes = dashboardStaleMinutes(env);
+  if (now.getTime() - uploaded < staleMinutes * 60000) return false;
+  const rendered = await env.BOOKS_BUCKET.head('dashboard/current-1bit.bmp');
+  if (rendered?.customMetadata?.staleSource === data.generatedAt) return false;
+  const bitmap = renderDashboardBmp(data, { stale: true, staleMinutes });
+  const mono = convertDashboardBmpTo1Bit(bitmap);
+  const options = { httpMetadata: { contentType: 'image/bmp' },
+    customMetadata: { staleSource: data.generatedAt } };
+  await env.BOOKS_BUCKET.put('dashboard/current-1bit.bmp', mono, options);
+  await env.BOOKS_BUCKET.put('dashboard/current.bmp', bitmap, options);
+  // Keep original JSON + generatedAt untouched: the age must never reset.
+  return true;
+}
+
 async function sendDashboard(req, env, format = 'json') {
   const image = format !== 'json';
   const key = format === 'mono' ? 'dashboard/current-1bit.bmp'
@@ -118,6 +149,9 @@ async function sendObject(req, env, key, mime) {
 }
 
 export default {
+  async scheduled(_event, env) {
+    await refreshDashboardFreshness(env);
+  },
   async fetch(req, env) {
     try {
       const url = new URL(req.url);

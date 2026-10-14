@@ -22,6 +22,10 @@
 		}
 	],
 	"vars": {
-		"READ_USER": "reader"
+		"READ_USER": "reader",
+		"DASHBOARD_STALE_MINUTES": "45"
+	},
+	"triggers": {
+		"crons": ["*/15 * * * *"]
 	}
 }
