@@ -9,9 +9,10 @@
  * Before running:
  * 1. In script.google.com enable Services → Tasks API (Advanced Service).
  * 2. In Project Settings → Script Properties, configure POCKET_UPLOAD_TOKEN.
- * 3. Set FAMILY_CALENDAR_ID to include and mark a shared family calendar.
- *    Optionally set CALENDAR_IDS (comma-separated, defaults to primary),
- *    DASHBOARD_FONT (golos-text/inter/ibm-plex-sans/onest), and
+ * 3. Configure CALENDAR_SOURCES as a JSON array of calendar IDs and
+ *    personal/family/shared/work categories (optional, default legacy behavior).
+ *    Existing FAMILY_CALENDAR_ID and CALENDAR_IDS continue working when
+ *    CALENDAR_SOURCES is absent. Also supports DASHBOARD_FONT and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
  * 4. Set Apps Script timezone to your actual local timezone.
  * 5. Run syncX3Dashboard manually to grant OAuth permissions, then schedule
@@ -24,6 +25,96 @@ const X3_DASHBOARD_URL = 'https://books.tiroq.dev/api/dashboard';
 const X3_MAX_EVENTS = 20;
 const X3_MAX_TASKS = 20;
 
+// Categories remain display-only; the Worker renders a fixed P/F/S/W glyph.
+const X3_CALENDAR_LABELS = { personal: 'P', family: 'F', shared: 'S', work: 'W' };
+
+/**
+ * New mode: CALENDAR_SOURCES JSON:
+ * [{"id":"primary","category":"personal","enabled":true},
+ *  {"id":"actual-shared-id","category":"family","enabled":true}]
+ *
+ * If absent, use the original CALENDAR_IDS/FAMILY_CALENDAR_ID semantics.
+ * Old primary events remain unmarked; adding CALENDAR_SOURCES enables P.
+ */
+function getX3CalendarSources(properties) {
+  const raw = properties.getProperty('CALENDAR_SOURCES');
+  if (raw && String(raw).trim()) {
+    if (raw.length > 8192) throw new Error('CALENDAR_SOURCES exceeds 8192 characters');
+    let specs;
+    try { specs = JSON.parse(raw); }
+    catch { throw new Error('CALENDAR_SOURCES must contain valid JSON'); }
+    if (!Array.isArray(specs) || specs.length > 20) {
+      throw new Error('CALENDAR_SOURCES must be an array of at most 20 calendar entries');
+    }
+    const entries = [];
+    const seen = new Map();
+    for (const spec of specs) {
+      if (!spec || Array.isArray(spec) || typeof spec !== 'object') {
+        throw new Error('Every CALENDAR_SOURCES entry must be an object');
+      }
+      if (typeof spec.id !== 'string' || !spec.id.trim() ||
+          typeof spec.category !== 'string' ||
+          !Object.prototype.hasOwnProperty.call(X3_CALENDAR_LABELS, spec.category)) {
+        throw new Error('Calendar source must have id and category personal/family/shared/work');
+      }
+      if (spec.enabled !== undefined && typeof spec.enabled !== 'boolean') {
+        throw new Error('Calendar source enabled must be a boolean');
+      }
+      if (spec.showBadge !== undefined && typeof spec.showBadge !== 'boolean') {
+        throw new Error('Calendar source showBadge must be a boolean');
+      }
+      if (spec.label !== undefined && spec.label !== X3_CALENDAR_LABELS[spec.category]) {
+        throw new Error('Calendar source label must match its category P/F/S/W');
+      }
+      if (spec.enabled === false) continue;
+      const id = spec.id.trim();
+      const calendar = id === 'primary'
+        ? CalendarApp.getDefaultCalendar()
+        : CalendarApp.getCalendarById(id);
+      if (!calendar) {
+        throw new Error('CALENDAR_SOURCES calendar is not accessible. Check its ID and sharing.');
+      }
+      const resolvedId = calendar.getId();
+      const previous = seen.get(resolvedId);
+      if (previous) {
+        if (previous.category !== spec.category ||
+            previous.showBadge !== (spec.showBadge !== false)) {
+          throw new Error('Duplicate calendar ID with conflicting category or badge visibility');
+        }
+        continue;
+      }
+      const entry = { id: resolvedId, calendar, category: spec.category,
+        showBadge: spec.showBadge !== false };
+      entries.push(entry);
+      seen.set(resolvedId, entry);
+    }
+    return entries;
+  }
+
+  // Legacy mode preserves previous behavior and F-only markers.
+  const familyId = String(properties.getProperty('FAMILY_CALENDAR_ID') || '').trim();
+  const calendarIds = String(properties.getProperty('CALENDAR_IDS') || '').split(',')
+    .map(id => id.trim()).filter(Boolean);
+  const entries = calendarIds.length
+    ? [...new Set(calendarIds)].map(id => ({
+        id, calendar: CalendarApp.getCalendarById(id),
+        category: id === familyId ? 'family' : null,
+        showBadge: id === familyId
+      }))
+    : (() => {
+        const primary = CalendarApp.getDefaultCalendar();
+        return [{ id: primary.getId(), calendar: primary, category: null, showBadge: false }];
+      })();
+  if (familyId && !entries.some(entry => entry.id === familyId)) {
+    entries.push({ id: familyId, calendar: CalendarApp.getCalendarById(familyId),
+      category: 'family', showBadge: true });
+  }
+  if (familyId && entries.some(entry => entry.id === familyId && !entry.calendar)) {
+    throw new Error('FAMILY_CALENDAR_ID is not accessible. Check the exact Google Calendar ID and sharing.');
+  }
+  return entries;
+}
+
 function syncX3Dashboard() {
   const properties = PropertiesService.getScriptProperties();
   const token = properties.getProperty('POCKET_UPLOAD_TOKEN');
@@ -35,27 +126,10 @@ function syncX3Dashboard() {
   // CalendarApp resolves the day's boundaries in the selected calendar's
   // own timezone, avoiding ambiguous parsing of timezone-less date strings.
 
-  // When configured, the shared family calendar is *added* to existing
-  // calendars; FAMILY_CALENDAR_ID alone is enough for primary + family.
-  // CALENDAR_IDS remains available for additional calendars/legacy setups.
-  const familyCalendarId = String(properties.getProperty('FAMILY_CALENDAR_ID') || '').trim();
-  const calendarIds = String(properties.getProperty('CALENDAR_IDS') || '').split(',')
-    .map(id => id.trim()).filter(Boolean);
-  const entries = calendarIds.length
-    ? [...new Set(calendarIds)].map(id => ({ id, calendar: CalendarApp.getCalendarById(id) }))
-    : (() => {
-        const primary = CalendarApp.getDefaultCalendar();
-        return [{ id: primary.getId(), calendar: primary }];
-      })();
-  if (familyCalendarId && !entries.some(entry => entry.id === familyCalendarId)) {
-    entries.push({ id: familyCalendarId, calendar: CalendarApp.getCalendarById(familyCalendarId) });
-  }
-  if (familyCalendarId && entries.some(entry => entry.id === familyCalendarId && !entry.calendar)) {
-    throw new Error('FAMILY_CALENDAR_ID is not accessible. Check the exact Google Calendar ID and sharing.');
-  }
-
+  const entries = getX3CalendarSources(properties);
   const events = [];
-  entries.filter(entry => entry.calendar).forEach(({ id, calendar }) => {
+  const byOccurrence = new Map();
+  entries.filter(entry => entry.calendar).forEach(({ calendar, category, showBadge }) => {
     calendar.getEventsForDay(now).forEach(event => {
       if (!event.getTitle()) return;
       const allDay = event.isAllDayEvent();
@@ -66,12 +140,26 @@ function syncX3Dashboard() {
         time: allDay ? '' : Utilities.formatDate(start, timezone, 'HH:mm'),
         title: event.getTitle(),
       };
-      // Render the tiny F marker in the existing gap between time and title.
-      if (familyCalendarId && id === familyCalendarId) item.calendar = 'family';
+      if (category && showBadge) item.calendar = category;
       if (!allDay && durationMinutes > 0 && durationMinutes <= 10080) {
         item.durationMinutes = durationMinutes;
       }
-      events.push({ startMillis: start.getTime(), item });
+      const startMillis = start.getTime();
+      // Only collapse actual shared invitations with the same iCal UID and
+      // occurrence start. Same title/time alone does not imply duplication.
+      const uid = typeof event.getId === 'function' ? event.getId() : '';
+      const key = uid ? uid + '\\u0000' + startMillis : null;
+      if (key && byOccurrence.has(key)) {
+        const existing = events[byOccurrence.get(key)];
+        const priority = { personal: 0, shared: 1, family: 2, work: 3 };
+        if ((priority[category] || 0) > (priority[existing.category] || 0)) {
+          existing.item = item;
+          existing.category = category;
+        }
+        return;
+      }
+      if (key) byOccurrence.set(key, events.length);
+      events.push({ startMillis, item, category });
     });
   });
   events.sort((a, b) => a.startMillis - b.startMillis);
