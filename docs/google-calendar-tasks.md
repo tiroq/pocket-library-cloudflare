@@ -103,6 +103,16 @@ send `"tasks": []` after Apps Script does its upload, it will clear
 tasks again. Disable the old iPhone automation when you enable the
 Apps Script trigger.
 
+## Multi-calendar categories (new)
+
+The preferred configuration is a single `CALENDAR_SOURCES` JSON array in
+Apps Script Properties. This supports `personal` (P), `family` (F),
+`shared` (S) and `work` (W), individual enable/disable, hidden personal
+markers, and calendar-event deduplication. It supersedes the older
+`FAMILY_CALENDAR_ID` / `CALENDAR_IDS` properties when present.
+
+**[Full migration, permissions, and JSON examples](calendar-sources.md)**.
+
 ## Shared Family calendar and the tiny F marker
 
 The script can now merge events from the **primary Google Calendar** and a
