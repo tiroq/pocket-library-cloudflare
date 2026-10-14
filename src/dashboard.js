@@ -563,7 +563,7 @@ export function renderDashboardBmp(data, options = {}) {
   const blocks = data.busyIntervals?.length ? data.busyIntervals : data.events
     .filter(event => event.time && event.durationMinutes > 0)
     .map(event => {
-      const m = /^(\\d{1,2}):(\\d{2})$/.exec(event.time);
+      const m = /^([0-9]{1,2}):([0-9]{2})$/.exec(event.time);
       if (!m) return null;
       const start = Number(m[1]) * 60 + Number(m[2]);
       return { start, end: Math.min(1440, start + event.durationMinutes) };
