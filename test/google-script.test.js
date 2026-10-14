@@ -528,13 +528,13 @@ test('priority sorts overdue before today and undated before 20-task cap', () =>
 });
 
 
-function makeHourlyForecast(today = '2026-10-14', tomorrow = '2026-10-15', shift = 0) {
+function makeHourlyForecast(today = '2026-10-14', tomorrow = '2026-10-15', shift = 0, overrideCode = null) {
   const time = [], temperature_2m = [], weather_code = [];
   for (const [date, temp] of [[today, 26], [tomorrow, 27]]) {
     for (let hour = 0; hour < 24; hour++) {
       time.push(date + 'T' + String(hour).padStart(2, '0') + ':00');
       temperature_2m.push(temp + hour / 4 + shift);
-      weather_code.push(hour === 8 ? 0 : hour === 14 ? 3 : 61);
+      weather_code.push(overrideCode ?? (hour === 8 ? 0 : hour === 14 ? 3 : 61));
     }
   }
   return { hourly: { time, temperature_2m, weather_code } };
@@ -550,7 +550,7 @@ test('hourly Open-Meteo stores today and tomorrow and refreshes cached temperatu
     getProperty: key => values.has(key) ? values.get(key) : base.getProperty(key),
     setProperty: (key, value) => { values.set(key, value); return null; }
   });
-  let hour = 10, outage = false, shift = 0, requests = 0;
+  let hour = 10, outage = false, shift = 0, overrideCode = null, requests = 0;
   const originalFormat = ctx.Utilities.formatDate;
   ctx.Utilities.formatDate = (date, tz, format) =>
     format === 'HH' ? String(hour).padStart(2, '0')
@@ -566,7 +566,7 @@ test('hourly Open-Meteo stores today and tomorrow and refreshes cached temperatu
     return outage ? { getResponseCode: () => 503 }
       : { getResponseCode: () => 200,
           getContentText: () => JSON.stringify(makeHourlyForecast(
-            '2026-10-14', '2026-10-15', shift)) };
+            '2026-10-14', '2026-10-15', shift, overrideCode)) };
   };
   ctx.syncX3Dashboard();
   assert.equal(requests, 1);
@@ -593,9 +593,11 @@ test('hourly Open-Meteo stores today and tomorrow and refreshes cached temperatu
   assert.equal(posts[2].weatherForecast.periods[0].temp, 29);
 
   outage = false;
-  shift = 4; // New forecast changes both temperature and icon code.
+  shift = 4;
+  overrideCode = 95; // A changed thunderstorm forecast must replace sun.
   ctx.syncX3Dashboard();
   assert.equal(posts[3].weatherForecast.periods[0].temp, 33);
+  assert.equal(posts[3].weatherForecast.periods[0].code, 95);
   assert.equal(JSON.parse(values.get('X3_WEATHER_CACHE_V1'))
     .days['2026-10-15'][0].temp, 33);
 });
