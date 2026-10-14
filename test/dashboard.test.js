@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/index.js';
-import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit } from '../src/dashboard.js';
+import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText } from '../src/dashboard.js';
 
 class MemoryR2 {
   constructor() { this.objects = new Map(); }
@@ -32,6 +32,37 @@ const example = {
 };
 const request = (path, options = {}) => new Request(ROOT + path, options);
 
+test('four font selections, default Golos, aliases, and bad choices', () => {
+  assert.deepEqual(DASHBOARD_FONTS, ['golos-text', 'inter', 'ibm-plex-sans', 'onest']);
+  assert.equal(DEFAULT_DASHBOARD_FONT, 'golos-text');
+  assert.equal(normalizeDashboard(example).font, 'golos-text');
+  assert.equal(normalizeDashboardFont('Golos Text'), 'golos-text');
+  assert.equal(normalizeDashboardFont('IBM Plex Sans'), 'ibm-plex-sans');
+  assert.equal(normalizeDashboardFont('Onest'), 'onest');
+  assert.equal(normalizeDashboardFont('INTER'), 'inter');
+  assert.throws(() => normalizeDashboardFont('Comic Sans'), /Unsupported font/);
+  assert.throws(() => normalizeDashboardFont(3), /font must be a string/);
+});
+
+test('each true font can render Cyrillic and long wrapped events without changing date', () => {
+  const images = [];
+  for (const font of DASHBOARD_FONTS) {
+    const data = normalizeDashboard({
+      ...example, font,
+      date: '14.10.2569',
+      events: [{ time: '14:30', title: 'Забрать детей из школы и пойти на длинную-длинную прогулку вечером' }]
+    });
+    const bytes = renderDashboardBmp(data);
+    assert.equal(bytes.length, 54 + 528 * 3 * 792);
+    const mono = convertDashboardBmpTo1Bit(bytes);
+    assert.ok(mono.length < 1024 * 1024);
+    // Glyphs are not the same bitmap dressed with four different labels.
+    images.push(Buffer.from(bytes).toString('base64').slice(0, 1500) +
+      Buffer.from(bytes).subarray(54).reduce((sum, b, n) => sum + (b === 0 ? (n % 97) + 1 : 0), 0));
+  }
+  assert.equal(new Set(images).size, 4);
+});
+
 test('dashboard schema validation and Unicode', () => {
   assert.equal(normalizeDashboard(example).events[0].title, 'Встреча с командой');
   assert.throws(() => normalizeDashboard({ date: 'now', tasks: [], events: 'x' }), /arrays/);
@@ -53,7 +84,7 @@ test('render exact X3 BMP with supported 24-bit uncompressed header and Cyrillic
   // White corners, black calendar header and a black section divider.
   assert.equal(bmp[54], 255);
   assert.ok(bmp.subarray(54).includes(0));
-  const row = 54 + (DASHBOARD_HEIGHT - 1 - 118) * (DASHBOARD_WIDTH * 3);
+  const row = 54 + (DASHBOARD_HEIGHT - 1 - 107) * (DASHBOARD_WIDTH * 3);
   assert.equal(bmp[row + 30 * 3], 0);
 });
 
