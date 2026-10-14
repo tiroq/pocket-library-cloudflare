@@ -100,3 +100,29 @@ The Cloudflare code now provides **generation and private distribution**. To mak
 - Protect the phone shortcut: it contains the upload token and allows replacing the dashboard.
 - Initial v1 shows up to six events and five tasks. The full JSON remains in R2 for a future richer UI.
 - Public R2 access must remain disabled.
+
+
+## Automatic sleep image download with CrossPoint SD Plugin Events
+
+The original `/dashboard.bmp` is a 24-bit BMP of ~1.25 MiB. **CrossPoint develop's plugin-event download is limited to 1 MiB.** The Worker therefore also saves a **pixel-identical 1-bit uncompressed BMP** (~54 KiB, black/white) whenever the existing iPhone Shortcut updates the calendar. No changes to the Shortcut JSON or authorization are necessary.
+
+- `GET https://books.tiroq.dev/dashboard-1bit.bmp` — protected by existing `reader` Basic auth; compatible with CrossPoint's 1-bit BMP reader.
+- R2 key: `dashboard/current-1bit.bmp`, in the same **private** bucket.
+- Existing `GET /dashboard.bmp` remains unchanged (24-bit).
+- If the new endpoint returns 404 directly after deployment, **run the iPhone Shortcut again** to generate the compact image for the first time.
+
+### Install the bundled CrossPoint plugin
+
+**Firmware prerequisite:** `sleep.enter` exists in [CrossPoint develop](https://github.com/crosspoint-reader/crosspoint-reader/blob/develop/docs/plugin-events.md), **not** CrossPoint **1.6.5 stable**. Upgrading/testing development firmware is a separate deliberate operation; **do not** flash firmware based on these Worker changes alone. Back up the microSD card and review release/build compatibility first.
+
+1. In this repository run `bash scripts/make-x3-plugin-config.sh` from a **local interactive terminal**. Enter the existing `READ_PASSWORD` for the `reader` account when prompted. This creates `plugins/x3-calendar/config.json` (ignored by Git). No `UPLOAD_TOKEN` is needed on the X3.
+2. Copy `plugins/x3-calendar/` (including the newly generated config) to the microSD root as `/.crosspoint/plugins/x3-calendar/`.
+3. Set **Sleep Screen → Custom** in CrossPoint. If you use **Cover + Custom**, a sleep directly from a book prioritizes the EPUB cover.
+4. Reboot X3 to discover the plugin, ensure a reachable saved 2.4 GHz Wi-Fi network, and run the iPhone Shortcut once.
+5. Put X3 to sleep. On a supported firmware the plugin downloads `/dashboard-1bit.bmp` over HTTPS **before drawing the sleep image**, writes to `/sleep.bmp` on SD, and enters sleep.
+
+On a failed download or offline Wi-Fi, the old `/sleep.bmp` stays intact. The firmware's sleep-entry connection is bounded, and sleep isn't blocked indefinitely. X3 does **not** periodically wake from deep sleep to repaint the screen: calendar updates are visible on the **next** sleep.
+
+**Auth:** `config.json` has an `authorization` field containing the full value of a `Basic` Authorization header. This is Base64, **not encryption**, so protect the microSD card. The plugin does not use the upload/delete token.
+
+See [plugins/x3-calendar/README.md](../plugins/x3-calendar/README.md) for plugin layout. The user's uncommitted config file must never be added to GitHub.
