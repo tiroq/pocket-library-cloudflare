@@ -100,6 +100,17 @@ and `CALENDAR_IDS` continue working when `CALENDAR_SOURCES` is unset.
 
 See **[multiple calendar setup](docs/calendar-sources.md)**.
 
+## Context-aware X3 calendar and freshness
+
+The calendar header can show the weekday and a tiny weather report, events
+ended before the last refresh can be hidden (`EVENTS_MODE=remaining`), and
+overdue Google Tasks appear first with an unobtrusive exclamation mark.
+Cloudflare Cron independently marks **stored static BMP images stale**
+if there was no successful dashboard upload for 45 minutes; the X3 still
+needs to fetch the newer image. Configure weather coordinates and display
+rules in Google Apps Script Properties; no location is hardcoded.
+See [context-aware setup](docs/calendar-dashboard.md#context-aware-dashboard-weekday-weather-remaining-events-and-task-urgency).
+
 ## Adaptive X3 agenda layout
 
 The sleep-screen bitmap packs as many events and tasks as fit rather than
