@@ -219,7 +219,7 @@ test('family calendar metadata persists in dashboard JSON, rejects unsupported t
   const invalid = normalizeDashboard.bind(null, {
     ...example, events: [{ time: '12:00', title: 'Unknown', calendar: 'surprise' }]
   });
-  assert.throws(invalid, /calendar must be primary or family/);
+  assert.throws(invalid, /calendar must be personal, family, shared, work or primary/);
   assert.equal(normalizeDashboard({
     ...example, events: [{ time: '12:00', title: 'Work', calendar: 'primary' }]
   }).events[0].calendar, undefined);
