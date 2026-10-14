@@ -427,3 +427,49 @@ test('work calendar with CalendarApp blank title is still represented as busy', 
     ['Занято', 45], ['Занято', 30], ['Planning', 90]
   ]);
 });
+
+test('FreeBusy 403 error exposes safe Google reason without leaking credentials or calendar IDs', () => {
+  const config = JSON.stringify([
+    { id: 'sensitive-work-id@company.com', category: 'work', mode: 'freebusy' }
+  ]);
+  const { ctx, posts } = setupMultiCalendarSources(config);
+  ctx.Utilities.parseDate = value => new Date(value.slice(0, 10) + 'T00:00:00Z');
+  ctx.ScriptApp = { getOAuthToken: () => 'very-secret-oauth-token' };
+  ctx.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 403,
+    getContentText: () => JSON.stringify({ error: {
+      status: 'PERMISSION_DENIED',
+      errors: [{ reason: 'insufficientPermissions', message: 'secret-work-id@company.com' }],
+      details: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }],
+      message: 'Token very-secret-oauth-token for sensitive-work-id@company.com was refused'
+    } })
+  });
+  assert.throws(() => ctx.syncX3Dashboard(), error => {
+    assert.match(error.message, /HTTP 403/);
+    assert.match(error.message, /insufficientPermissions/);
+    assert.match(error.message, /ACCESS_TOKEN_SCOPE_INSUFFICIENT/);
+    assert.doesNotMatch(error.message, /very-secret|work-id@company\.com/);
+    return true;
+  });
+  assert.equal(posts.length, 0);
+});
+
+test('FreeBusy ignores untrusted machine reasons in Google error response', () => {
+  const { ctx } = setupMultiCalendarSources(JSON.stringify([
+    { id: 'secret-work@company.com', category: 'work', mode: 'freebusy' }
+  ]));
+  ctx.Utilities.parseDate = value => new Date(value.slice(0, 10) + 'T00:00:00Z');
+  ctx.ScriptApp = { getOAuthToken: () => 'dummy-token' };
+  ctx.UrlFetchApp.fetch = () => ({
+    getResponseCode: () => 403,
+    getContentText: () => JSON.stringify({ error: {
+      status: 'PERMISSION_DENIED',
+      errors: [{ reason: 'Calendar secret-work@company.com denied' }]
+    } })
+  });
+  assert.throws(() => ctx.syncX3Dashboard(), error => {
+    assert.match(error.message, /PERMISSION_DENIED/);
+    assert.doesNotMatch(error.message, /secret-work/);
+    return true;
+  });
+});
