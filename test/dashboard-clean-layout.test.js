@@ -26,7 +26,7 @@ test('remove Google Calendar emoji, emoji modifiers and redundant spaces BEFORE 
   const normalized = normalizeDashboard({
     ...base,
     events: [{ time: '07:00', title }],
-    tasks: [{ title: '🧾   review   linkedin   for Pavlov', done: false },
+    tasks: [{ title: '🧾   review   linkedin   for Client', done: false },
       '💼   Подготовить    документы  ']
   });
   assert.equal(normalized.events[0].title, 'Теннис — урок (60 мин)');
