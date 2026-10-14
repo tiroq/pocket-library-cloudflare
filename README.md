@@ -8,8 +8,9 @@ A small **Cloudflare-only runtime**: Worker + private R2 bucket + custom domain 
 - **Download** EPUB directly from `/books/<sha256>.epub` with HTTP Basic authorization (CrossPoint OPDS-compatible).
 - **Deduplicate** byte-identical EPUB uploads by SHA-256.
 - **Storage privacy**: R2 bucket must remain private; no public `r2.dev` or R2 custom domain.
+- **Calendar dashboard**: POST your Apple Calendar/Reminders snapshot as JSON and download a private **528×792 BMP** for the XTEINK X3 sleep screen.
 
-> This package is code ready for deployment, **not** an already deployed Cloudflare service. The code was locally tested with Node; final Cloudflare runtime and XTEINK integration require account/device verification.
+> The repository is the source for the Cloudflare Worker deployed separately via Wrangler. Editing GitHub code does not redeploy an existing Worker unless you have connected CI/CD; run `npm test && npx wrangler deploy` when ready.
 
 ## Installation (Mac, Node.js 22+)
 
@@ -87,6 +88,18 @@ Expected `201` JSON containing `id`, `title`, `author`. Re-uploading the exact s
 curl -X DELETE -H "Authorization: Bearer $UPLOAD_TOKEN" \
   "https://books.tiroq.dev/api/books/<64-character-id>"
 ```
+
+## Calendar sleep screen (new)
+
+No extra server, package dependency, or R2 bucket is needed.
+
+- Send `POST /api/dashboard` with `Content-Type: application/json` and your existing **upload** bearer token.
+- The Worker generates a black-and-white **528×792, 24-bit uncompressed BMP** with English/Russian labels and stores it as `dashboard/current.bmp` in private R2.
+- Read the result from `GET /dashboard.bmp` with the existing **reader** Basic password. `GET /api/dashboard` provides the last JSON for troubleshooting.
+- Set CrossPoint Sleep Screen to **Custom** and upload the downloaded image as `/sleep.bmp` through X3 File Transfer.
+- **Automatic fetch on sleep is not provided by stock CrossPoint 1.6.5**. It requires a future firmware integration; uploading the JSON to Cloudflare does not itself change the sleeping X3 screen.
+
+See **[docs/calendar-dashboard.md](docs/calendar-dashboard.md)** for a working JSON example, curl validation and the iPhone Shortcut instructions.
 
 ## CrossPoint X3
 

@@ -1,5 +1,6 @@
 import { extractEpub } from './epub.js';
 import { bookRecord, renderHome, renderOpds } from './catalog.js';
+import { normalizeDashboard, renderDashboardBmp } from './dashboard.js';
 
 const MAX_EPUB = 12 * 1024 * 1024; // Conservative: free Workers have tight CPU/memory limits.
 const NO_STORE = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -68,6 +69,33 @@ async function upload(req, env) {
   });
   return jsonResponse({ ok: true, duplicate: false, id, title: info.title, author: info.author, url: `/books/${id}.epub` }, 201);
 }
+async function updateDashboard(req, env) {
+  if (!uploaderOK(req, env)) return unauthorizedUploader();
+  const limit = 24 * 1024;
+  if (Number(req.headers.get('Content-Length') || 0) > limit) return jsonResponse({ error: 'Dashboard JSON too large' }, 413);
+  if (!req.headers.get('Content-Type')?.toLowerCase().includes('application/json')) return jsonResponse({ error: 'Send application/json' }, 415);
+  const body = new Uint8Array(await req.arrayBuffer());
+  if (body.length > limit) return jsonResponse({ error: 'Dashboard JSON too large' }, 413);
+  let data;
+  try { data = normalizeDashboard(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))); }
+  catch (err) { return jsonResponse({ error: 'Invalid dashboard: ' + String(err.message || err) }, 400); }
+  const bitmap = renderDashboardBmp(data);
+  // Keep last good BMP if validation fails; no existing book keys are touched.
+  await env.BOOKS_BUCKET.put('dashboard/current.bmp', bitmap, { httpMetadata: { contentType: 'image/bmp' } });
+  await env.BOOKS_BUCKET.put('dashboard/current.json', JSON.stringify(data), { httpMetadata: { contentType: 'application/json' } });
+  return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', width: 528, height: 792,
+    updatedAt: data.generatedAt, events: data.events.length, tasks: data.tasks.length });
+}
+async function sendDashboard(req, env, image = false) {
+  const key = image ? 'dashboard/current.bmp' : 'dashboard/current.json';
+  const obj = req.method === 'HEAD' ? await env.BOOKS_BUCKET.head(key) : await env.BOOKS_BUCKET.get(key);
+  if (!obj) return textResponse('Dashboard has not been uploaded yet', 404);
+  const headers = new Headers(NO_STORE);
+  headers.set('Content-Type', image ? 'image/bmp' : 'application/json; charset=utf-8');
+  headers.set('Content-Length', String(obj.size));
+  if (image) headers.set('Content-Disposition', 'inline; filename="sleep.bmp"');
+  return new Response(req.method === 'HEAD' ? null : obj.body, { headers });
+}
 async function deleteBook(req, env, id) {
   if (!uploaderOK(req, env)) return unauthorizedUploader();
   // All three keys are id-derived; no arbitrary user-supplied paths accepted.
@@ -91,10 +119,13 @@ export default {
       if (url.pathname === '/health' && req.method === 'GET') return jsonResponse({ ok: true, name: 'pocket-library' });
       if (!env.BOOKS_BUCKET || !env.READ_PASSWORD || !env.UPLOAD_TOKEN) return textResponse('Worker is not fully configured', 503);
       if (url.pathname === '/api/books' && req.method === 'POST') return await upload(req, env);
+      if (url.pathname === '/api/dashboard' && req.method === 'POST') return await updateDashboard(req, env);
       const matchDelete = url.pathname.match(new RegExp(`^/api/books/(${ID})$`));
       if (matchDelete && req.method === 'DELETE') return await deleteBook(req, env, matchDelete[1]);
       if (!basicOK(req, env)) return unauthorizedReader();
       if (req.method !== 'GET' && req.method !== 'HEAD') return textResponse('Method not allowed', 405);
+      if (url.pathname === '/dashboard.bmp') return await sendDashboard(req, env, true);
+      if (url.pathname === '/api/dashboard') return await sendDashboard(req, env);
       if (url.pathname === '/' || url.pathname === '/opds.xml') {
         const cursor = url.searchParams.get('cursor') || '';
         if (cursor.length > 2048) return textResponse('Invalid cursor', 400);
