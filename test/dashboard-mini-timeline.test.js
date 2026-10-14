@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import {
   compactDashboardLinks, normalizeBusyIntervals, normalizeDashboard,
   renderDashboardBmp, convertDashboardBmpTo1Bit, planDashboardLayout,
-  DASHBOARD_FONTS, DASHBOARD_HEIGHT, DASHBOARD_WIDTH,
+  DASHBOARD_FONTS, DASHBOARD_HEIGHT, DASHBOARD_WIDTH, planBusyTimeline,
+  DASHBOARD_LAYOUT,
 } from '../src/dashboard.js';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -116,4 +117,89 @@ test('overdue heading count reacts only in section header, not task position', (
   assert.ok(changes.inside > 10);
   assert.equal(changes.outside, 0);
   assert.equal(planDashboardLayout(a).shownTasks, planDashboardLayout(b).shownTasks);
+});
+
+test('focused day scale covers meetings with rounded dynamic bounds', () => {
+  const m = planBusyTimeline([
+    { start: 7 * 60, end: 8 * 60 },
+    { start: 16 * 60 + 30, end: 17 * 60 }
+  ]);
+  assert.equal(m.start, 6 * 60);
+  assert.equal(m.end, 18 * 60);
+  assert.deepEqual(m.ticks, [6 * 60, 12 * 60, 18 * 60]);
+  assert.ok(m.blocks.every(b => b.start >= m.start && b.end <= m.end));
+
+  const cluster = planBusyTimeline([
+    { start: 12 * 60, end: 12 * 60 + 30 },
+    { start: 13 * 60, end: 13 * 60 + 30 }
+  ]);
+  assert.ok(cluster.end - cluster.start >= 10 * 60,
+    'a dense short cluster should not over-zoom the hourly bar');
+  assert.ok(cluster.start <= 12 * 60 && cluster.end >= 13 * 60 + 30);
+});
+
+test('empty and single-event days retain understandable 07 to 22 scale', () => {
+  const noEvents = planBusyTimeline([]);
+  assert.equal(noEvents.start, 420);
+  assert.equal(noEvents.end, 1320);
+  const single = planBusyTimeline([{ start: 9 * 60, end: 10 * 60 }]);
+  assert.equal(single.start, 420);
+  assert.equal(single.end, 1320);
+  const exceptional = planBusyTimeline([{ start: 23 * 60, end: 1440 }]);
+  assert.ok(exceptional.end >= 1440, 'late-night meeting cannot be clipped');
+  const wholeDay = planBusyTimeline([
+    { start: 0, end: 80 }, { start: 1380, end: 1440 }
+  ]);
+  assert.equal(wholeDay.start, 0);
+  assert.equal(wholeDay.end, 1440);
+});
+
+test('the chosen timeline window is confined to original header only', () => {
+  for (const font of DASHBOARD_FONTS) {
+    const options = [
+      [{ start: 420, end: 480 }, { start: 990, end: 1020 }],
+      [{ start: 500, end: 560 }],
+      []
+    ];
+    const renders = options.map(intervals => renderDashboardBmp(normalizeDashboard({
+      ...base, font, busyIntervals: intervals,
+      // Avoid legacy inference when the interval list is empty.
+      events: [],
+    })));
+    const changes = countPixelChangesOutsideRect(renders[0], renders[1], 225, 101, 499, 126);
+    assert.ok(changes.inside > 8);
+    assert.equal(changes.outside, 0, font);
+    const empty = renderDashboardBmp(normalizeDashboard({ ...base, font, events: [], busyIntervals: [] }));
+    assert.equal(hash(empty), hash(renders[2]));
+    assert.equal(new DataView(convertDashboardBmpTo1Bit(renders[0]).buffer).getUint16(28, true), 1);
+  }
+});
+
+test('fill the blank task strip using one-line ellipsis for the next long task', () => {
+  for (const font of DASHBOARD_FONTS) {
+    const events = Array.from({ length: 9 }, (_, i) => ({
+      title: 'Встреча ' + (i + 1),
+      time: '09:00', durationMinutes: 30
+    }));
+    const tasks = [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        title: 'Короткая задача ' + (i + 1), overdue: true
+      })),
+      { title: 'Перенести телефонный номер на другой аккаунт и уточнить условия обслуживания', overdue: true },
+      { title: 'Продолжить подготовку документов', overdue: true },
+      { title: 'Оформить страховку', overdue: true }
+    ];
+    const data = normalizeDashboard({ ...base, font, events, tasks });
+    const layout = planDashboardLayout(data);
+    assert.equal(layout.shownEvents, 6, font);
+    assert.equal(layout.shownTasks, 7, font + ': seventh task fits as one line');
+    assert.equal(layout.tasks[6].lines.length, 1);
+    assert.equal(layout.tasks[6].compact, true);
+    assert.ok(layout.tasks[6].lines[0].endsWith('…'), font);
+    assert.equal(layout.tasksOverflow, tasks.length - 7);
+    assert.ok(layout.tasksOverflowY + DASHBOARD_LAYOUT.taskOverflowH <= DASHBOARD_LAYOUT.contentBottomY);
+    assert.ok(layout.tasks[6].y + layout.tasks[6].height <= layout.tasksOverflowY);
+    const mono = convertDashboardBmpTo1Bit(renderDashboardBmp(data));
+    assert.equal(new DataView(mono.buffer).getUint16(28, true), 1);
+  }
 });
