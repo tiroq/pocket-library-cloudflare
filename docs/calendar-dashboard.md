@@ -32,11 +32,28 @@ four values. Date strings are not modified. Full details:
 
 ## Context-aware dashboard: weekday, weather, remaining events and task urgency
 
-The existing Google Apps Script can now render **today's weekday** in the
-large date heading, e.g. `СР · 14.10.2026`, and send a tiny weather label,
-e.g. `30° Дождь`, for the right-hand side of the same header. Layout is
-monochrome and the weather title is clipped to a narrow right-aligned column,
-never drawn over the date. No API key is needed for Open-Meteo.
+The X3 header uses the finalized **minimal compact date and 3-slot weather
+layout**. The day number appears once inside a hand-drawn calendar icon,
+with the short weekday above the short month to its right — no year, no
+duplicate number. Across the right are hourly forecasts at **08:00, 14:00
+and 20:00**: outlined monochrome weather icon + temperature. The original
+date string with the full year remains in the private JSON for backwards
+compatibility, but the new header deliberately does not render the year.
+There is **no additional screen height** consumed.
+
+Example (illustrative temperatures):
+
+```text
+[ 14 ]  СР      08       14       20
+        ОКТ    ☀ 26°   ☁ 32°   ☂ 28°
+──────────────────────────────────────
+СОБЫТИЯ
+```
+
+These pictograms are drawn directly with black pixels in the BMP (not
+Unicode emoji or device-dependent fonts). The rest of the adaptive agenda
+and tasks layout remains unchanged. Weather is sourced from
+[Open-Meteo](https://open-meteo.com/en/docs) with no API key.
 
 ### Script Properties
 
@@ -48,14 +65,36 @@ never drawn over the date. No API key is needed for Open-Meteo.
 | `INCLUDE_UNDATED_TASKS` | `false` | `true` includes tasks without due dates |
 | `WEATHER_LAT` | blank | latitude between -90 and 90, optional |
 | `WEATHER_LON` | blank | longitude between -180 and 180, optional |
+| `WEATHER_MODE` | `auto` | `auto` (after 20:00 show tomorrow), `today` (always today) |
 
-For the weather, set **both** `WEATHER_LAT` and `WEATHER_LON` to the
-coordinates of the intended location. **The app does not assume your city or
-use device GPS.** If both are unset the header remains weather-free. Current
-temperature and WMO weather code are fetched from
-[Open-Meteo](https://open-meteo.com/en/docs) with `UrlFetchApp.fetch`.
-Weather API outages are fail-open: calendar/tasks still update, with weather
-omitted from that refresh. Only coordinates are sent to Open-Meteo.
+Set **both** `WEATHER_LAT` and `WEATHER_LON` to the coordinates of
+your desired location (e.g. your configured Hua Hin coordinates); no city
+or GPS coordinates are hardcoded. If both are blank the weather disappears
+without disrupting the date/agenda. Only those coordinates are sent to
+Open-Meteo.
+
+On every 15-minute sync the script requests `hourly=temperature_2m,weather_code`
+with the Apps Script timezone and `forecast_days=2`. It extracts the 08, 14
+and 20-hour forecast for **today and tomorrow**, and caches the six points
+under `X3_WEATHER_CACHE_V1` in **private Script Properties** (not just in
+memory). It updates the cache when temperature, icon/weather code or other
+forecast values change. **On Open-Meteo timeout/HTTP failure/invalid response,
+it continues using the last successful cached forecast for the exact matching
+date, location and timezone**, keeping the rest of calendar/task sync working.
+
+With `WEATHER_MODE=auto` (default) the header switches at **20:00 local time**
+to tomorrow's three forecast periods and prints a small `ЗАВТРА` label
+above them; the left calendar icon still shows **today's date**. Set
+`WEATHER_MODE=today` to always show today's periods. Across midnight the
+previously cached tomorrow forecast becomes today's fallback. Forecasts
+from a different date/location are **never** reused — if the exact day
+is missing and the provider is down, the weather cells remain blank instead
+of showing misinformation.
+
+The cache is stored by Apps Script; it **is not an independent weather updater
+inside the Cloudflare Worker**. The Worker draws the three glyphs/icons from
+the uploaded `weatherForecast` array. The existing Cron only checks data
+freshness, and an already sleeping X3 must still fetch the new BMP.
 
 `remaining` filters out events with `end <= now`, **not** events that
 started earlier but are still ongoing. This applies to both standard events

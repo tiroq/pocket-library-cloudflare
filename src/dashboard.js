@@ -44,6 +44,40 @@ export function formatEventDuration(value) {
     (minutes ? minutes + 'M' : '') + ')';
 }
 
+/** Canonical compact X3 header from Apps Script. Legacy clients can omit it. */
+export function normalizeX3HeaderDate(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw) ||
+      !Number.isInteger(raw.day) || raw.day < 1 || raw.day > 31) {
+    throw new Error('headerDate must contain day 1..31');
+  }
+  const weekday = clean(raw.weekday ?? '', 18);
+  const month = clean(raw.month ?? '', 10);
+  if (!month) throw new Error('headerDate.month required');
+  return { day: raw.day, weekday, month };
+}
+
+export function normalizeX3WeatherForecast(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+      typeof raw.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date) ||
+      typeof raw.tomorrow !== 'boolean' ||
+      !Array.isArray(raw.periods) || raw.periods.length !== 3) {
+    throw new Error('weatherForecast requires date, tomorrow and three periods');
+  }
+  const hours = [8, 14, 20];
+  const periods = raw.periods.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        item.hour !== hours[index] || !Number.isInteger(item.temp) ||
+        item.temp < -90 || item.temp > 60 || !Number.isInteger(item.code) ||
+        item.code < 0 || item.code > 99) {
+      throw new Error('Invalid hourly weather forecast value');
+    }
+    return { hour: item.hour, temp: item.temp, code: item.code };
+  });
+  return { date: raw.date, tomorrow: raw.tomorrow, periods };
+}
+
 export function normalizeDashboard(raw) {
   if (!raw || Array.isArray(raw) || typeof raw !== 'object') throw new Error('Expected JSON object');
   if (!Array.isArray(raw.events) || !Array.isArray(raw.tasks)) throw new Error('events and tasks must be arrays');
@@ -69,6 +103,8 @@ export function normalizeDashboard(raw) {
   }).filter(t => t.title);
   return {
     date,
+    headerDate: normalizeX3HeaderDate(raw.headerDate),
+    weatherForecast: normalizeX3WeatherForecast(raw.weatherForecast),
     weather: clean(raw.weather ?? '', 42),
     font: normalizeDashboardFont(raw.font),
     locale: raw.locale === 'ru' ? 'ru' : 'en',
@@ -280,6 +316,82 @@ export function renderDashboardBmp(data, options = {}) {
       bytes.fill(0, row + x0 * 3, row + x1 * 3);
     }
   }
+  function line(x0, y0, x1, y1, thickness = 1) {
+    let x = Math.round(x0), y = Math.round(y0);
+    const ex = Math.round(x1), ey = Math.round(y1);
+    const dx = Math.abs(ex - x), dy = -Math.abs(ey - y);
+    const sx = x < ex ? 1 : -1, sy = y < ey ? 1 : -1;
+    let err = dx + dy;
+    for (;;) {
+      fillRect(x, y, thickness, thickness);
+      if (x === ex && y === ey) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x += sx; }
+      if (e2 <= dx) { err += dx; y += sy; }
+    }
+  }
+  function ring(cx, cy, radius) {
+    for (let i = 0; i < 32; i++) {
+      const a = i * Math.PI / 16, b = (i + 1) * Math.PI / 16;
+      line(cx + radius * Math.cos(a), cy + radius * Math.sin(a),
+        cx + radius * Math.cos(b), cy + radius * Math.sin(b));
+    }
+  }
+  function sun(x, y, radius = 6) {
+    ring(x, y, radius);
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4;
+      line(x + (radius + 3) * Math.cos(angle),
+        y + (radius + 3) * Math.sin(angle),
+        x + (radius + 6) * Math.cos(angle),
+        y + (radius + 6) * Math.sin(angle));
+    }
+  }
+  function cloud(x, y) {
+    // 28x18 silhouette in one-bit strokes, no Unicode emoji glyphs.
+    line(x + 3, y + 17, x + 25, y + 17);
+    line(x + 3, y + 17, x, y + 13);
+    line(x, y + 13, x + 1, y + 8);
+    line(x + 1, y + 8, x + 5, y + 5);
+    line(x + 5, y + 5, x + 10, y + 6);
+    line(x + 10, y + 6, x + 13, y + 1);
+    line(x + 13, y + 1, x + 19, y);
+    line(x + 19, y, x + 24, y + 4);
+    line(x + 24, y + 4, x + 25, y + 8);
+    line(x + 25, y + 8, x + 29, y + 11);
+    line(x + 29, y + 11, x + 27, y + 16);
+    line(x + 27, y + 16, x + 25, y + 17);
+  }
+  function weatherIcon(code, x, y) {
+    if (code === 0) { sun(x + 14, y + 11, 6); return; }
+    if (code <= 2) {
+      sun(x + 8, y + 7, 4);
+      cloud(x + 1, y + 8); return;
+    }
+    if (code === 3 || code === 45 || code === 48) {
+      cloud(x, y + 4);
+      if (code >= 45) {
+        line(x + 4, y + 26, x + 12, y + 26);
+        line(x + 17, y + 26, x + 25, y + 26);
+      }
+      return;
+    }
+    cloud(x, y + 1);
+    if (code >= 95) {
+      line(x + 16, y + 18, x + 11, y + 24);
+      line(x + 11, y + 24, x + 17, y + 23);
+      line(x + 17, y + 23, x + 13, y + 29);
+    } else if ([71, 73, 75, 77, 85, 86].includes(code)) {
+      for (const off of [6, 14, 22]) {
+        fillRect(x + off, y + 23, 2, 2);
+        fillRect(x + off + 2, y + 26, 2, 2);
+      }
+    } else {
+      for (const off of [6, 15, 24]) {
+        line(x + off, y + 20, x + off - 3, y + 26);
+      }
+    }
+  }
   function rule(y) { fillRect(28, y, 472, 2); }
   function write(value, x, y, role, width = DASHBOARD_WIDTH - x - 25) {
     const face = faceFor(data, role);
@@ -305,14 +417,52 @@ export function renderDashboardBmp(data, options = {}) {
     }
   }
   const layout = planDashboardLayout(data);
-  // The date and footer are fixed anchors; everything between adapts.
-  const weatherFace = faceFor(data, 'heading');
-  const weather = data.weather ? ellipsize(data.weather, weatherFace, 162) : '';
-  const weatherWidth = weather ? Math.ceil(textWidth(weather, weatherFace)) : 0;
-  const dateWidth = weather ? 472 - weatherWidth - 14 : 472;
-  write(data.date, 28, 24, 'date', dateWidth);
-  if (weather) {
-    write(weather, 500 - weatherWidth, 45, 'heading', weatherWidth + 1);
+  // The final minimal header uses icon day number + weekday/month only.
+  // Three weather cells share the original 87px header, leaving events/tasks
+  // unchanged. Old POST clients can still render the legacy full date.
+  if (data.headerDate) {
+    const { day, weekday, month } = data.headerDate;
+    const iconX = 30, iconY = 22, iconW = 42, iconH = 48;
+    // Calendar pictogram and two binder loops.
+    fillRect(iconX + 1, iconY + 9, iconW - 2, 2);
+    fillRect(iconX + 1, iconY + iconH - 2, iconW - 2, 2);
+    fillRect(iconX, iconY + 10, 2, iconH - 12);
+    fillRect(iconX + iconW - 2, iconY + 10, 2, iconH - 12);
+    fillRect(iconX + 1, iconY + 20, iconW - 2, 2);
+    fillRect(iconX + 9, iconY + 2, 3, 13);
+    fillRect(iconX + iconW - 12, iconY + 2, 3, 13);
+    const dayText = String(day);
+    const dayFace = faceFor(data, 'body');
+    write(dayText, iconX + Math.floor((iconW - textWidth(dayText, dayFace)) / 2),
+      iconY + 22, 'body', iconW);
+    write(weekday, 85, 25, 'body', 88);
+    write(month, 85, 52, 'heading', 88);
+    if (data.weatherForecast) {
+      fillRect(182, 25, 1, 46);
+      const forecast = data.weatherForecast;
+      if (forecast.tomorrow) write(ru ? 'ЗАВТРА' : 'TOMORROW', 195, 9, 'footer', 85);
+      const starts = [195, 297, 399];
+      for (let i = 0; i < 3; i++) {
+        const p = forecast.periods[i], x = starts[i];
+        const hourText = String(p.hour).padStart(2, '0');
+        const face = faceFor(data, 'footer');
+        write(hourText, x + Math.floor((100 - textWidth(hourText, face)) / 2),
+          forecast.tomorrow ? 27 : 22, 'footer', 100);
+        weatherIcon(p.code, x + 7, 45);
+        write(p.temp + '°', x + 45, 49, 'heading', 54);
+        if (i < 2) fillRect(x + 99, 26, 1, 45);
+      }
+    } else if (data.weather) {
+      write(ellipsize(data.weather, faceFor(data, 'heading'), 168),
+        329, 45, 'heading', 170);
+    }
+  } else {
+    const weatherFace = faceFor(data, 'heading');
+    const weather = data.weather ? ellipsize(data.weather, weatherFace, 162) : '';
+    const weatherWidth = weather ? Math.ceil(textWidth(weather, weatherFace)) : 0;
+    const dateWidth = weather ? 472 - weatherWidth - 14 : 472;
+    write(data.date, 28, 24, 'date', dateWidth);
+    if (weather) write(weather, 500 - weatherWidth, 45, 'heading', weatherWidth + 1);
   }
   rule(DASHBOARD_LAYOUT.dateRuleY);
 

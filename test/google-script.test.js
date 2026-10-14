@@ -527,36 +527,124 @@ test('priority sorts overdue before today and undated before 20-task cap', () =>
   assert.equal(posts[0].tasks[1].overdue, undefined);
 });
 
-test('compact weather is optional, configurable and fails open on API outages', () => {
-  const setup = () => setupMultiCalendarSources(JSON.stringify([
-    { id: 'primary', category: 'personal' }
-  ]), { WEATHER_LAT: '12.55', WEATHER_LON: '99.96' });
-  const { ctx, posts } = setup();
-  const original = ctx.UrlFetchApp.fetch;
-  let weatherCalls = 0;
-  ctx.UrlFetchApp.fetch = (url, options) => {
-    if (url.startsWith('https://api.open-meteo.com/')) {
-      weatherCalls++;
-      assert.match(url, /latitude=12.55/);
-      assert.match(url, /longitude=99.96/);
-      return { getResponseCode: () => 200, getContentText: () =>
-        JSON.stringify({ current: { temperature_2m: 30.4, weather_code: 61 } }) };
+
+function makeHourlyForecast(today = '2026-10-14', tomorrow = '2026-10-15', shift = 0, overrideCode = null) {
+  const time = [], temperature_2m = [], weather_code = [];
+  for (const [date, temp] of [[today, 26], [tomorrow, 27]]) {
+    for (let hour = 0; hour < 24; hour++) {
+      time.push(date + 'T' + String(hour).padStart(2, '0') + ':00');
+      temperature_2m.push(temp + hour / 4 + shift);
+      weather_code.push(overrideCode ?? (hour === 8 ? 0 : hour === 14 ? 3 : 61));
     }
-    return original(url, options);
+  }
+  return { hourly: { time, temperature_2m, weather_code } };
+}
+
+test('hourly Open-Meteo stores today and tomorrow and refreshes cached temperatures', () => {
+  const { ctx, posts } = setupMultiCalendarSources(
+    JSON.stringify([{ id: 'primary', category: 'personal' }]),
+    { WEATHER_LAT: '12.55', WEATHER_LON: '99.96', EVENTS_MODE: 'all' });
+  const values = new Map();
+  const base = ctx.PropertiesService.getScriptProperties();
+  ctx.PropertiesService.getScriptProperties = () => ({
+    getProperty: key => values.has(key) ? values.get(key) : base.getProperty(key),
+    setProperty: (key, value) => { values.set(key, value); return null; }
+  });
+  let hour = 10, outage = false, shift = 0, overrideCode = null, requests = 0;
+  const originalFormat = ctx.Utilities.formatDate;
+  ctx.Utilities.formatDate = (date, tz, format) =>
+    format === 'HH' ? String(hour).padStart(2, '0')
+      : originalFormat(date, tz, format);
+  const originalFetch = ctx.UrlFetchApp.fetch;
+  ctx.UrlFetchApp.fetch = (url, options) => {
+    if (!url.startsWith('https://api.open-meteo.com/')) return originalFetch(url, options);
+    requests++;
+    assert.match(url, /latitude=12.55/);
+    assert.match(url, /longitude=99.96/);
+    assert.match(url, /hourly=temperature_2m,weather_code/);
+    assert.match(url, /timezone=Asia%2FBangkok/);
+    return outage ? { getResponseCode: () => 503 }
+      : { getResponseCode: () => 200,
+          getContentText: () => JSON.stringify(makeHourlyForecast(
+            '2026-10-14', '2026-10-15', shift, overrideCode)) };
   };
   ctx.syncX3Dashboard();
-  assert.equal(weatherCalls, 1);
-  assert.equal(posts[0].weather, '30° Дождь');
+  assert.equal(requests, 1);
+  assert.equal(posts[0].weatherForecast.date, '2026-10-14');
+  assert.equal(posts[0].weatherForecast.tomorrow, false);
+  assert.deepEqual(posts[0].weatherForecast.periods.map(p => p.hour), [8, 14, 20]);
+  assert.equal(posts[0].weatherForecast.periods[0].temp, 28);
+  assert.equal(posts[0].headerDate.day, 14);
+  assert.equal(posts[0].headerDate.weekday, 'СР');
+  assert.equal(posts[0].headerDate.month, 'ОКТ');
+  const saved = JSON.parse(values.get('X3_WEATHER_CACHE_V1'));
+  assert.ok(saved.days['2026-10-14']);
+  assert.ok(saved.days['2026-10-15']);
 
-  const outage = setup();
-  const oldFetch = outage.ctx.UrlFetchApp.fetch;
-  outage.ctx.UrlFetchApp.fetch = (url, options) => url.startsWith('https://api.open-meteo.com/')
-    ? { getResponseCode: () => 503 }
-    : oldFetch(url, options);
-  outage.ctx.syncX3Dashboard();
-  assert.equal(outage.posts[0].weather, '');
+  outage = true;
+  ctx.syncX3Dashboard(); // Same date, provider temporarily failed.
+  assert.deepEqual(posts[1].weatherForecast, posts[0].weatherForecast);
+  assert.equal(values.get('X3_WEATHER_CACHE_V1'), JSON.stringify(saved));
 
-  const invalid = setupMultiCalendarSources(undefined, { WEATHER_LAT: 'hello', WEATHER_LON: '99.96' });
-  assert.throws(() => invalid.ctx.syncX3Dashboard(), /Invalid WEATHER_LAT/);
-  assert.equal(invalid.posts.length, 0);
+  hour = 21;
+  ctx.syncX3Dashboard(); // No API access but tomorrow was cached.
+  assert.equal(posts[2].weatherForecast.date, '2026-10-15');
+  assert.equal(posts[2].weatherForecast.tomorrow, true);
+  assert.equal(posts[2].weatherForecast.periods[0].temp, 29);
+
+  outage = false;
+  shift = 4;
+  overrideCode = 95; // A changed thunderstorm forecast must replace sun.
+  ctx.syncX3Dashboard();
+  assert.equal(posts[3].weatherForecast.periods[0].temp, 33);
+  assert.equal(posts[3].weatherForecast.periods[0].code, 95);
+  assert.equal(JSON.parse(values.get('X3_WEATHER_CACHE_V1'))
+    .days['2026-10-15'][0].temp, 33);
+});
+
+test('weather cache persists across midnight but is date- and location-scoped', () => {
+  const { ctx } = setupMultiCalendarSources();
+  const saved = { signature: '12.55000,99.96000,Asia/Bangkok', days: {
+    '2026-10-14': [{ hour: 8, temp: 29, code: 0 },
+      { hour: 14, temp: 32, code: 3 }, { hour: 20, temp: 27, code: 61 }],
+    '2026-10-15': [{ hour: 8, temp: 26, code: 1 },
+      { hour: 14, temp: 31, code: 2 }, { hour: 20, temp: 28, code: 3 }]
+  } };
+  const props = {
+    getProperty: key => ({
+      WEATHER_LAT: '12.55', WEATHER_LON: '99.96', WEATHER_MODE: 'today',
+      X3_WEATHER_CACHE_V1: JSON.stringify(saved)
+    })[key] || null,
+    setProperty: () => {}
+  };
+  ctx.Utilities.formatDate = () => '07';
+  ctx.UrlFetchApp.fetch = () => { throw new Error('Offline'); };
+  const nextMorning = ctx.getX3Weather(props, new Date('2026-10-14T23:59:00Z'),
+    'Asia/Bangkok', '2026-10-15');
+  assert.equal(nextMorning.date, '2026-10-15');
+  assert.equal(nextMorning.periods[0].temp, 26);
+  assert.equal(ctx.getX3Weather(props, new Date(), 'Asia/Bangkok',
+    '2026-10-16'), null);
+  const alteredProps = {
+    getProperty: key => key === 'WEATHER_LAT' ? '13.55' : props.getProperty(key),
+    setProperty: () => {}
+  };
+  assert.equal(ctx.getX3Weather(alteredProps, new Date(), 'Asia/Bangkok',
+    '2026-10-15'), null, 'never show a forecast for other coordinates');
+});
+
+test('weather can be disabled or restricted to today and rejects invalid settings', () => {
+  const { ctx } = setupMultiCalendarSources();
+  assert.equal(ctx.getX3Weather({
+    getProperty: () => null
+  }, new Date(), 'Asia/Bangkok', '2026-10-14'), null);
+  for (const props of [
+    { WEATHER_LAT: 'bad', WEATHER_LON: '99.96' },
+    { WEATHER_LAT: '12.55' },
+    { WEATHER_LAT: '12.55', WEATHER_LON: '99.96', WEATHER_MODE: 'future' }
+  ]) {
+    assert.throws(() => ctx.getX3Weather({
+      getProperty: key => props[key] || null
+    }, new Date(), 'Asia/Bangkok', '2026-10-14'), /WEATHER_/);
+  }
 });
