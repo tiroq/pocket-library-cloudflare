@@ -17,7 +17,7 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
   const context = {
     PropertiesService: {
       getScriptProperties: () => ({ getProperty: k => ({
-        POCKET_UPLOAD_TOKEN: 'test-token', DASHBOARD_FONT: 'golos-text'
+        POCKET_UPLOAD_TOKEN: 'test-token', DASHBOARD_FONT: 'golos-text', EVENTS_MODE: 'all'
       })[k] })
     },
     Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
@@ -95,6 +95,7 @@ test('shared family calendar is added to primary and its events receive F marker
       getScriptProperties: () => ({
         getProperty: k => ({
           POCKET_UPLOAD_TOKEN: 'test-token',
+          EVENTS_MODE: 'all',
           FAMILY_CALENDAR_ID: 'family-id',
           CALENDAR_IDS: calendarIds
         })[k]
@@ -193,6 +194,7 @@ function setupMultiCalendarSources(sourceConfig, extraProperties = {}) {
   };
   const values = {
     POCKET_UPLOAD_TOKEN: 'test-token',
+    EVENTS_MODE: 'all',
     ...(sourceConfig === undefined ? {} : { CALENDAR_SOURCES: sourceConfig }),
     ...extraProperties
   };
@@ -405,6 +407,7 @@ test('work calendar with CalendarApp blank title is still represented as busy', 
   const ctx = {
     PropertiesService: { getScriptProperties: () => ({
       getProperty: key => key === 'POCKET_UPLOAD_TOKEN' ? 'token'
+        : key === 'EVENTS_MODE' ? 'all'
         : key === 'CALENDAR_SOURCES'
           ? JSON.stringify([{ id: 'work@example.com', category: 'work' }]) : ''
     }) },
