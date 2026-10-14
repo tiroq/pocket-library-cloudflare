@@ -525,6 +525,7 @@ test('priority sorts overdue before today and undated before 20-task cap', () =>
   assert.equal(posts[0].tasks[0].overdue, true);
   assert.equal(posts[0].tasks[1].title, 'Сегодня');
   assert.equal(posts[0].tasks[1].overdue, undefined);
+  assert.equal(posts[0].tasksOverdueCount, 1);
 });
 
 
@@ -647,4 +648,31 @@ test('weather can be disabled or restricted to today and rejects invalid setting
       getProperty: key => props[key] || null
     }, new Date(), 'Asia/Bangkok', '2026-10-14'), /WEATHER_/);
   }
+});
+
+test('busy scale merges full-day overlaps and excludes all-day entries', () => {
+  const { ctx } = setupMultiCalendarSources();
+  ctx.Utilities.formatDate = (date, _zone, fmt) => {
+    const stamp = date.toISOString();
+    return fmt === 'yyyy-MM-dd' ? stamp.slice(0, 10)
+      : fmt === 'HH:mm' ? stamp.slice(11, 16) : '';
+  };
+  const ts = text => Date.parse(text);
+  const blocks = ctx.getX3DayBusyIntervals([
+    { startMillis: ts('2026-10-13T23:00:00Z'),
+      endMillis: ts('2026-10-14T01:00:00Z'), allDay: false },
+    { startMillis: ts('2026-10-14T00:30:00Z'),
+      endMillis: ts('2026-10-14T02:00:00Z'), allDay: false },
+    { startMillis: ts('2026-10-14T08:30:00Z'),
+      endMillis: ts('2026-10-14T09:30:00Z'), allDay: false },
+    { startMillis: ts('2026-10-14T12:00:00Z'),
+      endMillis: ts('2026-10-14T14:00:00Z'), allDay: true },
+    { startMillis: ts('2026-10-14T23:30:00Z'),
+      endMillis: ts('2026-10-15T01:00:00Z'), allDay: false }
+  ], '2026-10-14', 'UTC');
+  assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+    { start: 0, end: 120 },
+    { start: 510, end: 570 },
+    { start: 1410, end: 1440 }
+  ]);
 });
