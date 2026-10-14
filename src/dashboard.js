@@ -36,6 +36,35 @@ export function cleanDashboardTitle(value, limit = 120) {
   return Array.from(stripped).slice(0, limit).join('').trim();
 }
 
+export function compactDashboardLinks(title) {
+  if (typeof title !== 'string') throw new Error('title must be a string');
+  return title.replace(/https?:\/\/[^\s<>"']+/giu, original => {
+    const trimmed = original.replace(/[.,;!?)}\]]+$/u, '');
+    const suffix = original.slice(trimmed.length);
+    try {
+      const url = new URL(trimmed);
+      const host = url.hostname.replace(/^www\./iu, '').slice(0, 50);
+      const path = url.pathname.split('/').filter(Boolean)
+        .filter(seg => !/^(q|s|p|d|t|share|redirect|view)$/iu.test(seg))
+        .find(seg => /^[a-zа-яё][a-zа-яё0-9_-]{2,15}$/iu.test(seg));
+      return host + (path ? ' / ' + path : '') + suffix;
+    } catch { return original; }
+  }).replace(/\s+/gu, ' ').trim();
+}
+
+export function normalizeBusyIntervals(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 120)
+    throw new Error('busyIntervals must be an array of up to 120 intervals');
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        !Number.isInteger(item.start) || !Number.isInteger(item.end) ||
+        item.start < 0 || item.end > 1440 || item.end <= item.start)
+      throw new Error('Invalid busy interval');
+    return { start: item.start, end: item.end };
+  });
+}
+
 /**
  * Optional event duration, measured in whole minutes. Older iPhone Shortcuts
  * without durationMinutes retain their original layout. Stringified integers
@@ -110,6 +139,11 @@ export function normalizeDashboard(raw) {
       ...(durationMinutes === null ? {} : { durationMinutes }),
       ...(Object.hasOwn(DASHBOARD_CALENDAR_CATEGORIES, e.calendar) ? { calendar: e.calendar } : {}) };
   }).filter(e => e.title);
+  const busyIntervals = normalizeBusyIntervals(raw.busyIntervals);
+  const tasksOverdueCount = raw.tasksOverdueCount ?? null;
+  if (tasksOverdueCount !== null &&
+      (!Number.isInteger(tasksOverdueCount) || tasksOverdueCount < 0 || tasksOverdueCount > 100000))
+    throw new Error('Invalid tasksOverdueCount');
   const tasks = raw.tasks.map(t => {
     if (typeof t === 'string') return { title: cleanDashboardTitle(t, 120), done: false };
     if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('Invalid task');
@@ -125,6 +159,8 @@ export function normalizeDashboard(raw) {
     locale: raw.locale === 'ru' ? 'ru' : 'en',
     events,
     tasks,
+    busyIntervals,
+    tasksOverdueCount: tasksOverdueCount ?? tasks.filter(t => t.overdue).length,
     note: clean(raw.note ?? '', 280),
     updated: clean(raw.updated ?? '', 40),
     generatedAt: new Date().toISOString(),
@@ -250,12 +286,12 @@ export function planDashboardLayout(data) {
     const duration = formatEventDuration(event.durationMinutes);
     const durationWidth = duration ? Math.ceil(textWidth(duration, durationFace)) : 0;
     const titleWidth = duration ? Math.max(126, 352 - durationWidth - 12) : 352;
-    const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
+    const lines = wrapDashboardText(compactDashboardLinks(event.title), bodyFace, titleWidth, 2);
     return { event, duration, durationWidth, titleWidth, lines,
       height: Math.max(39, lines.length * 29 + 10) };
   });
   const tasks = data.tasks.map(task => {
-    const lines = wrapDashboardText(task.title, bodyFace, 440, 2);
+    const lines = wrapDashboardText(compactDashboardLinks(task.title), bodyFace, 440, 2);
     // Keep the 28px two-line baseline; trim redundant margins so more
     // tasks and the +N counter can fit in the remaining footer gap.
     return { task, lines, height: Math.max(35, lines.length * 28 + 4) };
