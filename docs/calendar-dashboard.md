@@ -12,6 +12,18 @@ In the Shortcuts payload Dictionary add **font** as Text; use one of these
 four values. Date strings are not modified. Full details:
 **[dashboard-fonts.md](dashboard-fonts.md)**.
 
+## Duration + Google Tasks
+
+The optional `durationMinutes` integer in each `events` record is rendered
+as a right-aligned label next to the event title, e.g. `(30M)`, `(1H)`
+or `(1H 30M)`. The original date string is not changed.
+
+Google Tasks shown inside Google Calendar are not Apple Reminders or ordinary
+calendar events. To include them automatically, see the optional
+[Google Apps Script integration](google-calendar-tasks.md), which reads both
+Google Calendar and Google Tasks. To add durations to your existing
+iPhone Shortcut, see the [step-by-step guide](google-calendar-tasks.md).
+
 ## API and privacy
 
 - `POST https://books.tiroq.dev/api/dashboard` – replace the current dashboard; use the **existing upload token** (`Authorization: Bearer ...`), `Content-Type: application/json`.
@@ -20,7 +32,7 @@ four values. Date strings are not modified. Full details:
 - Unauthorized users receive HTTP 401; missing dashboards return 404.
 - The upload is limited to 24 KiB of JSON and up to 20 events and 20 tasks; the **image** displays 6 events, 5 tasks and a short note. Data is stored as `dashboard/current.json` (metadata) plus `dashboard/current.bmp`.
 - Calendar data is **not public**. Neither secrets nor calendar entries should be in the URL or in server logs.
-- Russian and English text are supported by an embedded public-domain 8×8 bitmap font; unsupported Unicode characters render as `?`, including emojis. The font is scaled for E-Ink.
+- Russian and English text are supported by four pre-rasterized proportional font families. Unsupported Unicode characters may render as a fallback glyph.
 
 ## One-time smoke test from Mac
 

@@ -20,6 +20,29 @@ function clean(value, limit = 140) {
   return Array.from(value.replace(/[\x00-\x1F\x7F]/g, ' ').trim()).slice(0, limit).join('');
 }
 
+/**
+ * Optional event duration, measured in whole minutes. Older iPhone Shortcuts
+ * without durationMinutes retain their original layout. Stringified integers
+ * are accepted because Shortcuts can serialize Number variables as Text.
+ */
+export function normalizeDurationMinutes(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) value = Number(value.trim());
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 10080) {
+    throw new Error('durationMinutes must be a whole number between 0 and 10080');
+  }
+  return value;
+}
+
+export function formatEventDuration(value) {
+  if (value == null || value === 0) return '';
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return '(' + (hours ? hours + 'H' : '') +
+    (hours && minutes ? ' ' : '') +
+    (minutes ? minutes + 'M' : '') + ')';
+}
+
 export function normalizeDashboard(raw) {
   if (!raw || Array.isArray(raw) || typeof raw !== 'object') throw new Error('Expected JSON object');
   if (!Array.isArray(raw.events) || !Array.isArray(raw.tasks)) throw new Error('events and tasks must be arrays');
@@ -28,7 +51,9 @@ export function normalizeDashboard(raw) {
   if (!date) throw new Error('date is required (local date, e.g. WED 14 OCT)');
   const events = raw.events.map(e => {
     if (!e || typeof e !== 'object' || Array.isArray(e)) throw new Error('Invalid event');
-    return { time: clean(e.time ?? '', 20), title: clean(e.title, 120) };
+    const durationMinutes = normalizeDurationMinutes(e.durationMinutes);
+    return { time: clean(e.time ?? '', 20), title: clean(e.title, 120),
+      ...(durationMinutes === null ? {} : { durationMinutes }) };
   }).filter(e => e.title);
   const tasks = raw.tasks.map(t => {
     if (typeof t === 'string') return { title: clean(t, 120), done: false };
@@ -181,11 +206,18 @@ export function renderDashboardBmp(data) {
   write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, 126, 'heading');
   let eventY = 166, shownEvents = 0;
   for (const event of data.events.slice(0, 6)) {
-    const lines = wrapDashboardText(event.title, bodyFace, 351, 2);
+    // Reserve a right-aligned column for duration. The title wraps before it,
+    // never over it, even in Cyrillic and for longer labels like (1H 30M).
+    const duration = formatEventDuration(event.durationMinutes);
+    const durationFace = faceFor(data, 'heading');
+    const badgeWidth = duration ? Math.ceil(textWidth(duration, durationFace)) : 0;
+    const titleWidth = duration ? Math.max(126, 352 - badgeWidth - 12) : 352;
+    const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
     const rowH = Math.max(39, lines.length * 29 + 10);
     if (eventY + rowH > 486 && shownEvents > 0) break;
     write(event.time, 30, eventY + 1, 'time', 108);
-    lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', 352));
+    lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', titleWidth));
+    if (duration) write(duration, 500 - badgeWidth, eventY + 3, 'heading', badgeWidth + 1);
     eventY += rowH;
     shownEvents++;
   }
