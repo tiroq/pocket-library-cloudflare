@@ -2,6 +2,16 @@
 
 This feature is an **addition** to the existing Pocket Library Worker. Existing OPDS and book synchronization are unchanged.
 
+## Font selection
+
+An optional top-level JSON key `"font": "golos-text"` selects the font used
+for both BMP outputs. Other accepted values are `"inter"`,
+`"ibm-plex-sans"`, and `"onest"`. Golos Text is the default
+when no key is included, so existing iPhone Shortcuts keep working.
+In the Shortcuts payload Dictionary add **font** as Text; use one of these
+four values. Date strings are not modified. Full details:
+**[dashboard-fonts.md](dashboard-fonts.md)**.
+
 ## API and privacy
 
 - `POST https://books.tiroq.dev/api/dashboard` – replace the current dashboard; use the **existing upload token** (`Authorization: Bearer ...`), `Content-Type: application/json`.
