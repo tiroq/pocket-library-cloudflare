@@ -6,7 +6,7 @@ the private Cloudflare Worker. The Worker displays tiny **P/F/S/W** badges
 between time and title, without shifting title, duration or task positions.
 Google Tasks are still included in the same upload.
 
-See [context-aware dashboard setup](calendar-dashboard.md#context-aware-dashboard-weekday-weather-remaining-events-and-task-urgency) for weekday/weather/remaining-event and task urgency options, as well as Cloudflare freshness Cron.
+See [compact date and cached three-period weather setup](calendar-dashboard.md#context-aware-dashboard-weekday-weather-remaining-events-and-task-urgency) for day/month icon, auto tomorrow forecast, tasks priority, and static-BMP freshness.
 
 ## One property controls all calendar sources
 
