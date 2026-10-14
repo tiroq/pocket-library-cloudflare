@@ -27,7 +27,7 @@ function clean(value, limit = 140) {
  */
 export function normalizeDurationMinutes(value) {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value === 'string' && /^\\d+$/.test(value.trim())) value = Number(value.trim());
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) value = Number(value.trim());
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 10080) {
     throw new Error('durationMinutes must be a whole number between 0 and 10080');
   }
