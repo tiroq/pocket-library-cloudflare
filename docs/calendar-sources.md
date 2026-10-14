@@ -16,7 +16,7 @@ named `CALENDAR_SOURCES`. Its value is a **JSON array**:
   {"id":"primary","category":"personal","enabled":true,"label":"P"},
   {"id":"YOUR_FAMILY_CALENDAR_ID","category":"family","enabled":true,"label":"F"},
   {"id":"YOUR_SHARED_CALENDAR_ID","category":"shared","enabled":true,"label":"S"},
-  {"id":"YOUR_WORK_CALENDAR_ID","category":"work","enabled":true,"label":"W"}
+  {"id":"YOUR_WORK_CALENDAR_ID","category":"work","mode":"freebusy","enabled":true,"label":"W"}
 ]
 ```
 
@@ -50,6 +50,58 @@ that source's badge (particularly useful for the busiest personal calendar):
 A hidden badge does not reserve additional space. For normal five-character
 clock times, the markers fit into an **existing 19×19 px square** in the
 time/title gutter: the title and duration remain aligned across categories.
+
+### Work calendars with Free/Busy-only sharing
+
+If your work calendar is shared as **"See only free/busy (hide details)"**,
+CalendarApp may return generic `Busy` titles, empty titles, or no detailed
+events. **Set `"mode":"freebusy"` on that source**:
+
+```json
+{"id":"WORK_CALENDAR_ID","category":"work","mode":"freebusy","enabled":true}
+```
+
+This calls the **Google Calendar FreeBusy API**, not the event-title API.
+For each busy interval Google exposes, the dashboard shows its start time,
+a fixed privacy-preserving title **`Занято`**, and its duration, e.g.:
+
+```text
+09:00 [W] Занято                     (1H)
+10:30 [W] Занято                 (1H 30M)
+```
+
+No event names, descriptions, attendees or locations are retrieved or
+stored in Cloudflare. Google decides which intervals are busy; time
+marked as **Free / Available** is not sent. Intervals spanning midnight
+are clipped to the selected day's boundaries, including daylight-saving
+time changes. Overlapping busy events may be combined into a single busy
+interval by Google.
+
+**No additional Calendar advanced service is required**: Apps Script
+uses `UrlFetchApp.fetch` and `ScriptApp.getOAuthToken()` to call Google's
+`POST /calendar/v3/freeBusy`, using its existing Google Calendar
+authorization. Google may ask you to grant an updated permission when
+you first run the new script. If Google responds HTTP 403, check the
+script's granted OAuth scopes and whether **Google Calendar API** is enabled
+in the Google Cloud project linked to the script. Apps Script's existing
+**Tasks API** service remains necessary for Google Tasks.
+
+`"mode":"events"` is the default for all sources, including `work`.
+It displays real titles if available; when a work event has an empty title
+or Google's generic `Busy` label, the script renders `Занято`.
+Transparent/available events are skipped. If a work calendar gives **no
+events at all**, switch it explicitly to `mode:"freebusy"`.
+Other calendars (personal/family/shared) can continue using `events`.
+For `freebusy` mode, the shared calendar need not be added as a
+subscribed calendar in CalendarApp; the FreeBusy API checks its own
+availability permissions. An inaccessible calendar causes an error
+without erasing the previous dashboard.
+
+For a quick diagnosis: if `syncX3Dashboard` reports a FreeBusy error,
+confirm the **actual Calendar ID**, the work calendar's sharing permissions,
+and that the Apps Script is running under the Google account which can
+see that work calendar's availability in the web UI. Cross-account
+organization restrictions may still prevent Google API access.
 
 ### One-time setup and migration
 
