@@ -11,6 +11,7 @@
  * 2. In Project Settings → Script Properties, configure POCKET_UPLOAD_TOKEN.
  * 3. Configure CALENDAR_SOURCES as a JSON array of calendar IDs and
  *    personal/family/shared/work categories (optional, default legacy behavior).
+ *    Work calendars that share only availability should use mode:'freebusy'.
  *    Existing FAMILY_CALENDAR_ID and CALENDAR_IDS continue working when
  *    CALENDAR_SOURCES is absent. Also supports DASHBOARD_FONT and
  *    INCLUDE_UNDATED_TASKS (true/false, default false).
@@ -60,6 +61,9 @@ function getX3CalendarSources(properties) {
       if (spec.enabled !== undefined && typeof spec.enabled !== 'boolean') {
         throw new Error('Calendar source enabled must be a boolean');
       }
+      if (spec.mode !== undefined && spec.mode !== 'events' && spec.mode !== 'freebusy') {
+        throw new Error('Calendar source mode must be events or freebusy');
+      }
       if (spec.showBadge !== undefined && typeof spec.showBadge !== 'boolean') {
         throw new Error('Calendar source showBadge must be a boolean');
       }
@@ -68,23 +72,26 @@ function getX3CalendarSources(properties) {
       }
       if (spec.enabled === false) continue;
       const id = spec.id.trim();
-      const calendar = id === 'primary'
-        ? CalendarApp.getDefaultCalendar()
-        : CalendarApp.getCalendarById(id);
-      if (!calendar) {
+      const mode = spec.mode || 'events';
+      // FreeBusy only requires availability visibility, not CalendarApp
+      // permission to read event titles or even a subscribed calendar.
+      const calendar = id === 'primary' ? CalendarApp.getDefaultCalendar()
+        : mode === 'freebusy' ? null : CalendarApp.getCalendarById(id);
+      if (!calendar && mode === 'events') {
         throw new Error('CALENDAR_SOURCES calendar is not accessible. Check its ID and sharing.');
       }
-      const resolvedId = calendar.getId();
+      const resolvedId = calendar ? calendar.getId() : id;
       const previous = seen.get(resolvedId);
       if (previous) {
         if (previous.category !== spec.category ||
-            previous.showBadge !== (spec.showBadge !== false)) {
+            previous.showBadge !== (spec.showBadge !== false) ||
+            previous.mode !== mode) {
           throw new Error('Duplicate calendar ID with conflicting category or badge visibility');
         }
         continue;
       }
       const entry = { id: resolvedId, calendar, category: spec.category,
-        showBadge: spec.showBadge !== false };
+        showBadge: spec.showBadge !== false, mode };
       entries.push(entry);
       seen.set(resolvedId, entry);
     }
@@ -115,6 +122,67 @@ function getX3CalendarSources(properties) {
   return entries;
 }
 
+/**
+ * Fetch availability without reading event titles. This works with calendars
+ * shared as "See only free/busy (hide details)". Uses existing Calendar OAuth
+ * permissions and Google's native freeBusy endpoint (no Advanced Calendar
+ * Service required). Only the start and end of busy intervals are returned.
+ */
+function getX3FreeBusyIntervals(entries, now, timezone) {
+  if (!entries.length) return [];
+  const dateKey = Utilities.formatDate(now, timezone, 'yyyy-MM-dd');
+  const parts = dateKey.split('-').map(Number);
+  const nextDateKey = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + 1))
+    .toISOString().slice(0, 10);
+  // parseDate resolves both local midnights separately, including DST days.
+  const fmt = 'yyyy-MM-dd HH:mm:ss';
+  const begin = Utilities.parseDate(dateKey + ' 00:00:00', timezone, fmt);
+  const finish = Utilities.parseDate(nextDateKey + ' 00:00:00', timezone, fmt);
+  const response = UrlFetchApp.fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+    method: 'post',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    contentType: 'application/json',
+    payload: JSON.stringify({
+      timeMin: begin.toISOString(), timeMax: finish.toISOString(),
+      timeZone: timezone,
+      items: entries.map(entry => ({ id: entry.id }))
+    }),
+    muteHttpExceptions: true
+  });
+  if (response.getResponseCode() !== 200) {
+    // Do not log calendar IDs, OAuth token, or private API response bodies.
+    throw new Error('Google Calendar FreeBusy API HTTP ' + response.getResponseCode() +
+      '. Check Calendar API availability and Apps Script OAuth scopes.');
+  }
+  let data;
+  try { data = JSON.parse(response.getContentText()); }
+  catch { throw new Error('Google Calendar FreeBusy returned invalid JSON'); }
+  const intervals = [];
+  for (const entry of entries) {
+    const result = data.calendars && data.calendars[entry.id];
+    if (!result || (result.errors && result.errors.length) || !Array.isArray(result.busy)) {
+      throw new Error('Google Calendar FreeBusy has no access to a configured calendar.');
+    }
+    for (const block of result.busy) {
+      const start = new Date(block.start);
+      const end = new Date(block.end);
+      const startMillis = Math.max(start.getTime(), begin.getTime());
+      const endMillis = Math.min(end.getTime(), finish.getTime());
+      if (!Number.isFinite(startMillis) || !Number.isFinite(endMillis) ||
+          endMillis <= startMillis) continue;
+      const durationMinutes = Math.round((endMillis - startMillis) / 60000);
+      const item = {
+        time: Utilities.formatDate(new Date(startMillis), timezone, 'HH:mm'),
+        title: 'Занято'
+      };
+      if (entry.category && entry.showBadge) item.calendar = entry.category;
+      if (durationMinutes > 0 && durationMinutes <= 10080) item.durationMinutes = durationMinutes;
+      intervals.push({ startMillis, item, category: entry.category });
+    }
+  }
+  return intervals;
+}
+
 function syncX3Dashboard() {
   const properties = PropertiesService.getScriptProperties();
   const token = properties.getProperty('POCKET_UPLOAD_TOKEN');
@@ -127,18 +195,24 @@ function syncX3Dashboard() {
   // own timezone, avoiding ambiguous parsing of timezone-less date strings.
 
   const entries = getX3CalendarSources(properties);
-  const events = [];
+  const events = getX3FreeBusyIntervals(entries.filter(entry => entry.mode === 'freebusy'), now, timezone);
   const byOccurrence = new Map();
-  entries.filter(entry => entry.calendar).forEach(({ calendar, category, showBadge }) => {
+  entries.filter(entry => entry.mode !== 'freebusy' && entry.calendar).forEach(({ calendar, category, showBadge }) => {
     calendar.getEventsForDay(now).forEach(event => {
-      if (!event.getTitle()) return;
+      // Transparent events block no time. Shared Free/Busy views may have
+      // empty titles or the localized generic name "Busy".
+      if (typeof event.getTransparency === 'function' &&
+          String(event.getTransparency()).toUpperCase() === 'TRANSPARENT') return;
+      const eventTitle = String(event.getTitle() || '').trim();
+      if (!eventTitle && category !== 'work') return;
       const allDay = event.isAllDayEvent();
       const start = event.getStartTime();
       const end = event.getEndTime();
       const durationMinutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
       const item = {
         time: allDay ? '' : Utilities.formatDate(start, timezone, 'HH:mm'),
-        title: event.getTitle(),
+        title: category === 'work' && (!eventTitle || /^(busy|занято)$/i.test(eventTitle))
+          ? 'Занято' : eventTitle,
       };
       if (category && showBadge) item.calendar = category;
       if (!allDay && durationMinutes > 0 && durationMinutes <= 10080) {
