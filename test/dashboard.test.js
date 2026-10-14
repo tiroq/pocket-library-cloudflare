@@ -86,6 +86,33 @@ test('duration minutes format compactly and normalize existing + new event recor
   }
 });
 
+test('dashboard HTTP API preserves durationMinutes and accepts legacy events', async () => {
+  const e = env();
+  const payload = {
+    ...example,
+    events: [
+      { title: 'Meeting', time: '10:00', durationMinutes: 90 },
+      { title: 'Free afternoon', time: '14:00' }
+    ],
+  };
+  const response = await app.fetch(request('/api/dashboard', {
+    method: 'POST', headers: writer, body: JSON.stringify(payload)
+  }), e);
+  assert.equal(response.status, 200);
+  const data = await (await app.fetch(request('/api/dashboard', { headers: reader }), e)).json();
+  assert.equal(data.events[0].durationMinutes, 90);
+  assert.equal(data.events[1].durationMinutes, undefined);
+  assert.equal(data.date, example.date); // date/locale are never reinterpreted
+  const invalid = await app.fetch(request('/api/dashboard', {
+    method: 'POST', headers: writer,
+    body: JSON.stringify({ ...example, events: [{ title: 'Oops', durationMinutes: '1H' }] })
+  }), e);
+  assert.equal(invalid.status, 400);
+  // Validation rejects bad updates without replacing the last good JSON.
+  const preserved = await (await app.fetch(request('/api/dashboard', { headers: reader }), e)).json();
+  assert.equal(preserved.events[0].durationMinutes, 90);
+});
+
 test('duration badges change both BMP versions with no change to date or unsupported fonts', () => {
   for (const font of DASHBOARD_FONTS) {
     const normal = normalizeDashboard({ ...example, font });
