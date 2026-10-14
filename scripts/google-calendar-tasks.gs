@@ -200,7 +200,7 @@ function getX3FreeBusyIntervals(entries, now, timezone) {
       };
       if (entry.category && entry.showBadge) item.calendar = entry.category;
       if (durationMinutes > 0 && durationMinutes <= 10080) item.durationMinutes = durationMinutes;
-      intervals.push({ startMillis, endMillis, item, category: entry.category });
+      intervals.push({ startMillis, endMillis, item, category: entry.category, allDay: false });
     }
   }
   return intervals;
@@ -324,6 +324,34 @@ function getX3Weekday(dateKey, style) {
   return weekdays[dow] + ' · ';
 }
 
+/**
+ * Build an independent 24-hour busy bar BEFORE filtering completed events,
+ * so that the bar describes the whole day even when EVENTS_MODE=remaining.
+ * Overlapping calendar events are combined into a single dark segment.
+ * All-day entries aren't treated as 24-hour meetings.
+ */
+function getX3DayBusyIntervals(events, dateKey, timezone) {
+  const minutes = (millis, edge) => {
+    const at = new Date(millis);
+    const day = Utilities.formatDate(at, timezone, 'yyyy-MM-dd');
+    if (day < dateKey) return 0;
+    if (day > dateKey) return 1440;
+    const parts = Utilities.formatDate(at, timezone, 'HH:mm').split(':').map(Number);
+    return parts[0] * 60 + parts[1];
+  };
+  const intervals = events.filter(e => !e.allDay).map(e => ({
+    start: minutes(e.startMillis),
+    end: minutes(e.endMillis)
+  })).filter(e => e.end > e.start).sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const block of intervals) {
+    const last = merged[merged.length - 1];
+    if (last && block.start <= last.end) last.end = Math.max(last.end, block.end);
+    else merged.push({ start: block.start, end: block.end });
+  }
+  return merged.slice(0, 120);
+}
+
 function syncX3Dashboard() {
   const properties = PropertiesService.getScriptProperties();
   const token = properties.getProperty('POCKET_UPLOAD_TOKEN');
@@ -380,15 +408,17 @@ function syncX3Dashboard() {
           existing.item = item;
           existing.category = category;
           existing.endMillis = end.getTime();
+          existing.allDay = allDay;
         }
         return;
       }
       if (key) byOccurrence.set(key, events.length);
-      events.push({ startMillis, endMillis: end.getTime(), item, category });
+      events.push({ startMillis, endMillis: end.getTime(), item, category, allDay });
     });
   });
   // Filter by END, not start: an ongoing event remains visible.
   // The FreeBusy query clips today's interval, so end is start + duration.
+  const busyIntervals = getX3DayBusyIntervals(events, dateKey, timezone);
   const remainingEvents = eventsMode === 'all' ? events : events.filter(entry =>
     (entry.endMillis || (entry.startMillis + (entry.item.durationMinutes || 0) * 60000)) > now.getTime());
   remainingEvents.sort((a, b) => a.startMillis - b.startMillis);
@@ -447,6 +477,8 @@ function syncX3Dashboard() {
     weatherForecast: getX3Weather(properties, now, timezone, dateKey),
     updated: Utilities.formatDate(now, timezone, 'HH:mm'),
     events: orderedEvents,
+    busyIntervals,
+    tasksOverdueCount: tasks.filter(task => task.overdue).length,
     tasks: tasks.slice(0, X3_MAX_TASKS).map(task => ({ title: task.title, done: task.done,
       ...(task.overdue ? { overdue: true } : {}) })),
     note: '',

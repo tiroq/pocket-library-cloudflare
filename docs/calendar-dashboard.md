@@ -153,6 +153,47 @@ push an updated image to a sleeping CrossPoint 1.6.5 device on its own.
    run manually and verify the warning clears. Remember to restore the
    trigger after testing.
 
+## Compact agenda headers, links, and 24-hour occupancy
+
+The E-Ink dashboard now uses minimal hand-drawn calendar/checklist icons with
+**ПЛАН / ДЕЛА** captions in place of the longer section titles. The event
+heading contains a thin **24-hour occupancy bar** on the right (0:00–24:00):
+black segments show times with scheduled meetings, including shared FreeBusy
+work blocks. Overlapping intervals are merged. The bar uses *all* timed
+calendar entries from the day **before** `EVENTS_MODE=remaining` removes
+completed meetings, so it stays a truthful daily overview even at night.
+All-day events do not fill the entire bar.
+
+The Google Apps Script sends an optional `busyIntervals` array in minutes
+from local midnight, e.g. `[{"start":420,"end":480}]`. Each endpoint is
+clamped to the current calendar day. If the field is absent, older dashboard
+clients derive the bar from the displayed event start times and optional
+`durationMinutes` for best-effort compatibility.
+
+The checklist heading displays a compact **N просрочено** count on the
+right. The Apps Script computes `tasksOverdueCount` across all collected
+Google Tasks *before* the 20-task upload limit, so this count includes tasks
+not visible on the BMP. The collector currently limits its total candidates
+to 500 tasks; on exceptionally large accounts the count is bounded by
+those collected tasks. Older clients derive it from submitted
+`overdue: true` flags. None of these badges changes the adaptive
+section heights.
+
+Long `https://` links inside task titles or calendar event names become
+compact display labels such as `example.org / bonds` while preserving
+surrounding prose. Tracking query strings, fragments and opaque path IDs
+are not shown. The **original title remains in stored dashboard JSON**
+(subject to its existing title length cap), and nothing in Google Calendar
+or Google Tasks is modified. This is a **static bitmap**, not a clickable
+link. The four fonts and both BMP versions are supported.
+
+**Rollout:** deploy the updated Cloudflare Worker, paste the new
+`scripts/google-calendar-tasks.gs` into the existing private Google Apps
+Script `Code.gs`, then manually execute `syncX3Dashboard` once. Its
+current 15-minute trigger does not need to be recreated. The Worker
+supports older payloads, but the *full-day* timeline and *full collected*
+overdue count require the updated Apps Script to send the two new fields.
+
 ## Adaptive agenda layout
 
 The dashboard uses the unused gap beneath the date: the first rule is now at
