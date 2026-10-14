@@ -135,3 +135,14 @@ function syncX3Dashboard() {
   console.log('Pocket Library dashboard updated; events=%s tasks=%s',
     dashboard.events.length, dashboard.tasks.length);
 }
+
+/**
+ * One-time diagnostic helper: run this inside your private Apps Script project
+ * to find the exact IDs of calendars that your Google account can access.
+ * Does not print events, tasks or authentication tokens.
+ */
+function listX3CalendarIds() {
+  CalendarApp.getAllCalendars().forEach(calendar => {
+    console.log('%s — %s', calendar.getName(), calendar.getId());
+  });
+}
