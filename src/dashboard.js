@@ -46,7 +46,7 @@ export function compactDashboardLinks(title) {
       const host = url.hostname.replace(/^www\./iu, '').slice(0, 50);
       const path = url.pathname.split('/').filter(Boolean)
         .filter(seg => !/^(q|s|p|d|t|share|redirect|view)$/iu.test(seg))
-        .find(seg => /^[a-zа-яё][a-zа-яё0-9_-]{2,15}$/iu.test(seg));
+        .find(seg => /^[a-zа-яё][a-zа-яё0-9_-]{2,15}$/iu.test(seg) && !seg.includes('_'));
       return host + (path ? ' / ' + path : '') + suffix;
     } catch { return original; }
   }).replace(/\s+/gu, ' ').trim();
