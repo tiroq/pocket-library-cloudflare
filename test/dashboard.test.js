@@ -132,6 +132,63 @@ test('duration badges change both BMP versions with no change to date or unsuppo
   }
 });
 
+test('family marker never shifts time, title or duration even with Cyrillic and four fonts', () => {
+  for (const font of DASHBOARD_FONTS) {
+    const input = {
+      ...example, font,
+      events: [{ time: '07:30', title: 'Забрать детей из школы', durationMinutes: 90 }]
+    };
+    const regular = renderDashboardBmp(normalizeDashboard(input));
+    const tagged = renderDashboardBmp(normalizeDashboard({
+      ...input,
+      events: input.events.map(event => ({ ...event, calendar: 'family' }))
+    }));
+    assert.notEqual(createHash('sha256').update(regular).digest('hex'),
+      createHash('sha256').update(tagged).digest('hex'));
+    // Only pixels inside the time/title gutter (x=119..137) may change.
+    // This ensures text position and duration never move.
+    let changes = 0;
+    for (let y = 0; y < DASHBOARD_HEIGHT; y++) {
+      const row = 54 + (DASHBOARD_HEIGHT - 1 - y) * DASHBOARD_WIDTH * 3;
+      for (let x = 0; x < DASHBOARD_WIDTH; x++) {
+        const pixel = row + x * 3;
+        if (regular[pixel] === tagged[pixel]) continue;
+        changes++;
+        assert.ok(x >= 119 && x <= 137 && y >= 174 && y < 195,
+          'unexpected pixel change at ' + x + ',' + y);
+      }
+    }
+    assert.ok(changes > 10, 'family badge should be legible');
+    const compact = convertDashboardBmpTo1Bit(tagged);
+    assert.ok(compact.length < 1024 * 1024);
+  }
+});
+
+test('family calendar metadata persists in dashboard JSON, rejects unsupported tags', async () => {
+  const payload = {
+    ...example,
+    events: [
+      { time: '09:00', title: 'Primary' },
+      { time: '10:00', title: 'Family', calendar: 'family', durationMinutes: 45 }
+    ]
+  };
+  const e = env();
+  const update = await app.fetch(request('/api/dashboard', {
+    method: 'POST', headers: writer, body: JSON.stringify(payload)
+  }), e);
+  assert.equal(update.status, 200);
+  const json = await (await app.fetch(request('/api/dashboard', { headers: reader }), e)).json();
+  assert.equal(json.events[0].calendar, undefined);
+  assert.equal(json.events[1].calendar, 'family');
+  const invalid = normalizeDashboard.bind(null, {
+    ...example, events: [{ time: '12:00', title: 'Unknown', calendar: 'surprise' }]
+  });
+  assert.throws(invalid, /calendar must be primary or family/);
+  assert.equal(normalizeDashboard({
+    ...example, events: [{ time: '12:00', title: 'Work', calendar: 'primary' }]
+  }).events[0].calendar, undefined);
+});
+
 test('dashboard schema validation and Unicode', () => {
   assert.equal(normalizeDashboard(example).events[0].title, 'Встреча с командой');
   assert.throws(() => normalizeDashboard({ date: 'now', tasks: [], events: 'x' }), /arrays/);
