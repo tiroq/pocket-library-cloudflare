@@ -1,6 +1,6 @@
 import { extractEpub } from './epub.js';
 import { bookRecord, renderHome, renderOpds } from './catalog.js';
-import { normalizeDashboard, renderDashboardBmp } from './dashboard.js';
+import { normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit } from './dashboard.js';
 
 const MAX_EPUB = 12 * 1024 * 1024; // Conservative: free Workers have tight CPU/memory limits.
 const NO_STORE = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -80,14 +80,19 @@ async function updateDashboard(req, env) {
   try { data = normalizeDashboard(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))); }
   catch (err) { return jsonResponse({ error: 'Invalid dashboard: ' + String(err.message || err) }, 400); }
   const bitmap = renderDashboardBmp(data);
-  // Keep last good BMP if validation fails; no existing book keys are touched.
+  const sleepBitmap = convertDashboardBmpTo1Bit(bitmap);
+  // Both representations are private. The compact file fits CrossPoint's
+  // one-megabyte sleep.enter plugin download limit.
+  await env.BOOKS_BUCKET.put('dashboard/current-1bit.bmp', sleepBitmap, { httpMetadata: { contentType: 'image/bmp' } });
   await env.BOOKS_BUCKET.put('dashboard/current.bmp', bitmap, { httpMetadata: { contentType: 'image/bmp' } });
   await env.BOOKS_BUCKET.put('dashboard/current.json', JSON.stringify(data), { httpMetadata: { contentType: 'application/json' } });
-  return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', width: 528, height: 792,
+  return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', sleepImageUrl: '/dashboard-1bit.bmp', width: 528, height: 792,
     updatedAt: data.generatedAt, events: data.events.length, tasks: data.tasks.length });
 }
-async function sendDashboard(req, env, image = false) {
-  const key = image ? 'dashboard/current.bmp' : 'dashboard/current.json';
+async function sendDashboard(req, env, format = 'json') {
+  const image = format !== 'json';
+  const key = format === 'mono' ? 'dashboard/current-1bit.bmp'
+    : image ? 'dashboard/current.bmp' : 'dashboard/current.json';
   const obj = req.method === 'HEAD' ? await env.BOOKS_BUCKET.head(key) : await env.BOOKS_BUCKET.get(key);
   if (!obj) return textResponse('Dashboard has not been uploaded yet', 404);
   const headers = new Headers(NO_STORE);
@@ -124,7 +129,8 @@ export default {
       if (matchDelete && req.method === 'DELETE') return await deleteBook(req, env, matchDelete[1]);
       if (!basicOK(req, env)) return unauthorizedReader();
       if (req.method !== 'GET' && req.method !== 'HEAD') return textResponse('Method not allowed', 405);
-      if (url.pathname === '/dashboard.bmp') return await sendDashboard(req, env, true);
+      if (url.pathname === '/dashboard.bmp') return await sendDashboard(req, env, 'color');
+      if (url.pathname === '/dashboard-1bit.bmp') return await sendDashboard(req, env, 'mono');
       if (url.pathname === '/api/dashboard') return await sendDashboard(req, env);
       if (url.pathname === '/' || url.pathname === '/opds.xml') {
         const cursor = url.searchParams.get('cursor') || '';

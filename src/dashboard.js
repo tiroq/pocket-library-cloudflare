@@ -123,3 +123,47 @@ export function renderDashboardBmp(data) {
   print('X3 / POCKET LIBRARY', 322, 752, 1, 175);
   return bytes;
 }
+
+
+/**
+ * Convert the same monochrome calendar raster into a compact Windows BMP for
+ * CrossPoint's sleep.enter plugin. The plugin has a 1 MiB download cap, while
+ * the original 24-bit BMP is ~1.25 MiB. Bitmap pixels are already pure black
+ * or white, so this conversion is lossless.
+ *
+ * BMP: BITMAPFILEHEADER (14) + BITMAPINFOHEADER (40) + 2 BGRA palette colors
+ * (8) + bottom-up, MSB-first, 1-bit scanlines padded to four bytes.
+ */
+export function convertDashboardBmpTo1Bit(source) {
+  if (!(source instanceof Uint8Array) || source.length !== BMP_SIZE) {
+    throw new Error('Expected a rendered 24-bit X3 dashboard');
+  }
+  const stride = Math.ceil(DASHBOARD_WIDTH / 32) * 4;
+  const pixelsOffset = 62;
+  const output = new Uint8Array(pixelsOffset + stride * DASHBOARD_HEIGHT);
+  const header = new DataView(output.buffer);
+  output[0] = 0x42; output[1] = 0x4d;
+  header.setUint32(2, output.length, true);
+  header.setUint32(10, pixelsOffset, true);
+  header.setUint32(14, 40, true);
+  header.setInt32(18, DASHBOARD_WIDTH, true);
+  header.setInt32(22, DASHBOARD_HEIGHT, true);
+  header.setUint16(26, 1, true);
+  header.setUint16(28, 1, true);
+  header.setUint32(34, stride * DASHBOARD_HEIGHT, true);
+  header.setInt32(38, 2835, true);
+  header.setInt32(42, 2835, true);
+  header.setUint32(46, 2, true);
+  // Palette index 0 = black (already zeroed); index 1 = white.
+  output.set([255, 255, 255, 0], 58);
+  for (let row = 0; row < DASHBOARD_HEIGHT; row++) {
+    const rgbBase = 54 + row * ROW_BYTES;
+    const monoBase = pixelsOffset + row * stride;
+    for (let x = 0; x < DASHBOARD_WIDTH; x++) {
+      if (source[rgbBase + x * 3] > 127) {
+        output[monoBase + (x >>> 3)] |= 0x80 >>> (x & 7);
+      }
+    }
+  }
+  return output;
+}

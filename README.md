@@ -101,6 +101,8 @@ No extra server, package dependency, or R2 bucket is needed.
 
 See **[docs/calendar-dashboard.md](docs/calendar-dashboard.md)** for a working JSON example, curl validation and the iPhone Shortcut instructions.
 
+For **automatic Custom sleep-screen refresh** on supported CrossPoint develop firmware, the Worker also exposes a compact **1-bit** BMP at `/dashboard-1bit.bmp` (read-only Basic auth). See the bundled [X3 Calendar SD plugin](plugins/x3-calendar/README.md) and [setup instructions](docs/calendar-dashboard.md#automatic-sleep-image-download-with-crosspoint-sd-plugin-events). Stable CrossPoint **1.6.5 does not support `sleep.enter`**.
+
 ## CrossPoint X3
 
 `Settings → System → OPDS Servers → Add Server`
