@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/index.js';
-import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp } from '../src/dashboard.js';
+import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit } from '../src/dashboard.js';
 
 class MemoryR2 {
   constructor() { this.objects = new Map(); }
@@ -88,4 +88,62 @@ test('reject malformed JSON and unsupported content types without modifying stor
   const oversized = await app.fetch(request('/api/dashboard', { method: 'POST', headers: writer, body: 'x'.repeat(24577) }), e);
   assert.equal(oversized.status, 413);
   assert.equal(e.BOOKS_BUCKET.objects.size, 0);
+});
+
+
+test('compact dashboard is valid 1-bit BMP, < 1 MiB, and pixel-identical to 24-bit dashboard', () => {
+  const src = renderDashboardBmp(normalizeDashboard(example));
+  const mono = convertDashboardBmpTo1Bit(src);
+  const h = new DataView(mono.buffer);
+  assert.equal(mono[0], 0x42); assert.equal(mono[1], 0x4d);
+  assert.equal(h.getUint32(2, true), mono.length);
+  assert.equal(h.getUint32(10, true), 62);
+  assert.equal(h.getUint32(14, true), 40);
+  assert.equal(h.getInt32(18, true), 528);
+  assert.equal(h.getInt32(22, true), 792);
+  assert.equal(h.getUint16(26, true), 1);
+  assert.equal(h.getUint16(28, true), 1);
+  assert.equal(h.getUint32(30, true), 0);
+  assert.deepEqual([...mono.subarray(54, 62)], [0, 0, 0, 0, 255, 255, 255, 0]);
+  const stride = Math.ceil(528 / 32) * 4;
+  assert.equal(mono.length, 62 + stride * 792);
+  assert.ok(mono.length < 1024 * 1024, 'CrossPoint 1 MiB download cap');
+  // Compare every pixel, including each row's first/last pixel and glyphs.
+  for (let row = 0; row < DASHBOARD_HEIGHT; row++) {
+    const sourceRow = 54 + row * DASHBOARD_WIDTH * 3;
+    const monoRow = 62 + row * stride;
+    for (let x = 0; x < DASHBOARD_WIDTH; x++) {
+      const actual = (mono[monoRow + (x >>> 3)] >>> (7 - (x & 7))) & 1;
+      assert.equal(actual, src[sourceRow + x * 3] === 255 ? 1 : 0,
+        'pixel mismatch at (' + x + ',' + row + ')');
+    }
+  }
+});
+
+test('compact BMP uses existing Basic read auth and is stored in private R2 on update', async () => {
+  const e = env();
+  assert.equal((await app.fetch(request('/dashboard-1bit.bmp', { headers: reader }), e)).status, 404);
+  assert.equal((await app.fetch(request('/dashboard-1bit.bmp'), e)).status, 401);
+  const post = await app.fetch(request('/api/dashboard', {
+    method: 'POST', headers: writer, body: JSON.stringify(example)
+  }), e);
+  assert.equal(post.status, 200);
+  const result = await post.json();
+  assert.equal(result.sleepImageUrl, '/dashboard-1bit.bmp');
+  assert.ok(e.BOOKS_BUCKET.objects.has('dashboard/current-1bit.bmp'));
+  assert.ok(e.BOOKS_BUCKET.objects.has('dashboard/current.bmp'));
+  assert.ok(e.BOOKS_BUCKET.objects.has('dashboard/current.json'));
+  const get = await app.fetch(request('/dashboard-1bit.bmp', { headers: reader }), e);
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get('Content-Type'), 'image/bmp');
+  assert.match(get.headers.get('Content-Disposition'), /sleep.bmp/);
+  assert.equal(get.headers.get('Cache-Control'), 'private, no-store');
+  const bytes = new Uint8Array(await get.arrayBuffer());
+  assert.equal(new DataView(bytes.buffer).getUint16(28, true), 1);
+  assert.ok(bytes.length < 1024 * 1024);
+  const head = await app.fetch(request('/dashboard-1bit.bmp', { method: 'HEAD', headers: reader }), e);
+  assert.equal(head.status, 200);
+  assert.equal(Number(head.headers.get('Content-Length')), bytes.length);
+  assert.equal((await app.fetch(request('/dashboard-1bit.bmp', { headers: writer }), e)).status, 401);
+  assert.equal((await app.fetch(request('/opds.xml', { headers: reader }), e)).status, 200);
 });
