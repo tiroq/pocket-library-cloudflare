@@ -87,7 +87,7 @@ async function updateDashboard(req, env) {
   await env.BOOKS_BUCKET.put('dashboard/current.bmp', bitmap, { httpMetadata: { contentType: 'image/bmp' } });
   await env.BOOKS_BUCKET.put('dashboard/current.json', JSON.stringify(data), { httpMetadata: { contentType: 'application/json' } });
   return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', sleepImageUrl: '/dashboard-1bit.bmp', width: 528, height: 792,
-    updatedAt: data.generatedAt, events: data.events.length, tasks: data.tasks.length });
+    updatedAt: data.generatedAt, font: data.font, events: data.events.length, tasks: data.tasks.length });
 }
 async function sendDashboard(req, env, format = 'json') {
   const image = format !== 'json';
