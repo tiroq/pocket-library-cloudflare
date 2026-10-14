@@ -2,6 +2,15 @@
 
 This feature is an **addition** to the existing Pocket Library Worker. Existing OPDS and book synchronization are unchanged.
 
+## Shared family Google Calendar
+
+Events from a shared Family calendar can be merged with the primary calendar
+using the optional Apps Script property `FAMILY_CALENDAR_ID`.
+Family events get a tiny outlined **F** between the fixed start-time and title
+columns, without changing title position or duration alignment.
+See [Google Calendar & Tasks](google-calendar-tasks.md#shared-family-calendar-and-the-tiny-f-marker)
+for exact setup.
+
 ## Font selection
 
 An optional top-level JSON key `"font": "golos-text"` selects the font used
