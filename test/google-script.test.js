@@ -27,6 +27,7 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
     },
     CalendarApp: {
       getDefaultCalendar: () => ({
+        getId: () => 'primary-id',
         getEventsForDay: () => [{
           getTitle: () => 'Командная встреча',
           getStartTime: () => start,
@@ -65,4 +66,103 @@ test('Google Calendar event duration and Google Tasks produce one complete priva
   assert.equal(payload.tasks.some(t => t.title === 'Готово'), false);
   assert.equal(payload.date, '14.10.2026');
   assert.equal(payload.font, 'golos-text');
+});
+
+test('shared family calendar is added to primary and its events receive F marker metadata', () => {
+  const now = new Date('2026-10-14T02:30:00Z');
+  const calendarsRead = [];
+  const sent = [];
+  const primary = {
+    getId: () => 'primary-id',
+    getEventsForDay: () => [{
+      getTitle: () => 'Личная встреча',
+      isAllDayEvent: () => false,
+      getStartTime: () => new Date('2026-10-14T02:30:00Z'),
+      getEndTime: () => new Date('2026-10-14T03:30:00Z')
+    }]
+  };
+  const family = {
+    getId: () => 'family-id',
+    getEventsForDay: () => [{
+      getTitle: () => 'Семейное мероприятие',
+      isAllDayEvent: () => false,
+      getStartTime: () => new Date('2026-10-14T04:30:00Z'),
+      getEndTime: () => new Date('2026-10-14T05:15:00Z')
+    }]
+  };
+  const makeContext = (calendarIds = '') => ({
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: k => ({
+          POCKET_UPLOAD_TOKEN: 'test-token',
+          FAMILY_CALENDAR_ID: 'family-id',
+          CALENDAR_IDS: calendarIds
+        })[k]
+      })
+    },
+    Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
+    Utilities: {
+      formatDate: (_date, _tz, fmt) => ({
+        'yyyy-MM-dd': '2026-10-14',
+        'dd.MM.yyyy': '14.10.2026',
+        'HH:mm': '11:30'
+      })[fmt]
+    },
+    CalendarApp: {
+      getDefaultCalendar: () => primary,
+      getCalendarById: id => {
+        calendarsRead.push(id);
+        return id === 'family-id' ? family : id === 'primary-id' ? primary : null;
+      }
+    },
+    Tasks: {
+      Tasklists: { list: () => ({ items: [] }) },
+      Tasks: { list: () => ({ items: [] }) }
+    },
+    UrlFetchApp: { fetch: (_url, options) => {
+      sent.push(JSON.parse(options.payload));
+      return { getResponseCode: () => 200 };
+    } },
+    console: { log: () => {} },
+    Date,
+    JSON
+  });
+  const one = makeContext();
+  script.runInNewContext(one);
+  one.syncX3Dashboard();
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].events.map(e => e.title),
+    ['Личная встреча', 'Семейное мероприятие']);
+  assert.equal(sent[0].events[0].calendar, undefined);
+  assert.equal(sent[0].events[1].calendar, 'family');
+  assert.equal(sent[0].events[1].durationMinutes, 45);
+  assert.deepEqual(calendarsRead, ['family-id']);
+
+  // Family is not duplicated if an existing CALENDAR_IDS list also has it.
+  calendarsRead.length = 0;
+  const two = makeContext('primary-id,family-id,family-id');
+  script.runInNewContext(two);
+  two.syncX3Dashboard();
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].events.length, 2);
+  assert.equal(sent[1].events.filter(e => e.calendar === 'family').length, 1);
+  assert.deepEqual(calendarsRead, ['primary-id', 'family-id']);
+});
+
+test('inaccessible configured family calendar fails loudly, not silently', () => {
+  const ctx = {
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: k => k === 'POCKET_UPLOAD_TOKEN' ? 'test-token'
+        : k === 'FAMILY_CALENDAR_ID' ? 'not-shared-id' : ''
+    }) },
+    Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
+    Utilities: { formatDate: () => '2026-10-14' },
+    CalendarApp: {
+      getDefaultCalendar: () => ({ getId: () => 'primary', getEventsForDay: () => [] }),
+      getCalendarById: () => null
+    },
+    Date, JSON,
+  };
+  script.runInNewContext(ctx);
+  assert.throws(() => ctx.syncX3Dashboard(), /FAMILY_CALENDAR_ID is not accessible/);
 });
