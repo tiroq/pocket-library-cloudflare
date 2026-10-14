@@ -114,7 +114,7 @@ def main():
             fonts_by_weight[500] = download(spec["url"].replace("{weight}", "Medium"))
             fonts_by_weight[600] = download(spec["url"].replace("{weight}", "SemiBold"))
         for role, (size, weight) in ROLES.items():
-            font = get_font(name, fonts_by_weight[weight], size, weight)
+            font = get_font(name, fonts_by_weight.get(weight, primary), size, weight)
             ascent, descent = font.getmetrics()
             glyphs = {}
             for cp in CODEPOINTS:
