@@ -278,6 +278,44 @@ export const DASHBOARD_LAYOUT = Object.freeze({
   taskOverflowH: 22,
 });
 
+/**
+ * Choose a useful horizontal viewport for a day-occupancy timeline.
+ * Two or more meetings: 1h padding and at least a 10h field of view.
+ * One or no meetings: stable 07:00–22:00 field, extended for odd hours.
+ * Do not display the timestamp of a changed past-event filter; bars come
+ * from the day's actual busy intervals, not the truncated visible agenda.
+ */
+export function planBusyTimeline(intervals) {
+  const blocks = (Array.isArray(intervals) ? intervals : [])
+    .filter(block => block && Number.isFinite(block.start) &&
+      Number.isFinite(block.end) && block.end > block.start)
+    .map(block => ({
+      start: Math.max(0, Math.min(1440, block.start)),
+      end: Math.max(0, Math.min(1440, block.end))
+    })).filter(block => block.end > block.start);
+  let start = 7 * 60, end = 22 * 60;
+  if (blocks.length >= 2) {
+    const first = Math.min(...blocks.map(block => block.start));
+    const last = Math.max(...blocks.map(block => block.end));
+    start = Math.max(0, Math.floor((first - 60) / 60) * 60);
+    end = Math.min(1440, Math.ceil((last + 60) / 60) * 60);
+    // Very short clusters would turn a 30-minute block into a giant band.
+    // Maintain a 10h minimum without hiding any intervals.
+    if (end - start < 600) {
+      const missing = 600 - (end - start);
+      start = Math.max(0, start - Math.ceil(missing / 120) * 60);
+      end = Math.min(1440, start + 600);
+      start = Math.max(0, end - 600);
+    }
+  } else if (blocks.length === 1) {
+    // Keep single-meeting days legible and comparable with an ordinary day.
+    start = Math.min(start, Math.max(0, Math.floor((blocks[0].start - 60) / 60) * 60));
+    end = Math.max(end, Math.min(1440, Math.ceil((blocks[0].end + 60) / 60) * 60));
+  }
+  const middle = Math.round((start + end) / 120) * 60;
+  return { start, end, ticks: [start, middle, end], blocks };
+}
+
 export function planDashboardLayout(data) {
   const layout = DASHBOARD_LAYOUT;
   const bodyFace = faceFor(data, 'body');
@@ -294,7 +332,13 @@ export function planDashboardLayout(data) {
     const lines = wrapDashboardText(compactDashboardLinks(task.title), bodyFace, 440, 2);
     // Keep the 28px two-line baseline; trim redundant margins so more
     // tasks and the +N counter can fit in the remaining footer gap.
-    return { task, lines, height: Math.max(35, lines.length * 28 + 4) };
+    return {
+      task, lines, height: Math.max(35, lines.length * 28 + 4),
+      // The final two-line task may miss the remaining space by just a few
+      // pixels. Keep the task, trim it to one ellipsized line and retain +N.
+      compactLines: lines.length > 1
+        ? wrapDashboardText(compactDashboardLinks(task.title), bodyFace, 440, 1) : lines,
+    };
   });
 
   const sectionOverhead = layout.taskHeaderOffset + layout.taskStartOffset;
@@ -330,9 +374,19 @@ export function planDashboardLayout(data) {
   for (const row of tasks) {
     const next = shownTasks + 1;
     const needsCounter = next < tasks.length;
-    if (taskY + row.height + (needsCounter ? layout.taskOverflowH : 0) > layout.contentBottomY) break;
-    taskPositions.push({ ...row, y: taskY });
-    taskY += row.height;
+    const overflowSpace = needsCounter ? layout.taskOverflowH : 0;
+    let placed = row;
+    if (taskY + row.height + overflowSpace > layout.contentBottomY) {
+      // Do not abandon a long next task when an ellipsized one-line version
+      // can fit in the otherwise empty gap. This preserves task priority
+      // order, readable font sizes and the overflow counter.
+      if (row.lines.length > 1 &&
+          taskY + 35 + overflowSpace <= layout.contentBottomY) {
+        placed = { ...row, lines: row.compactLines, height: 35, compact: true };
+      } else break;
+    }
+    taskPositions.push({ ...placed, y: taskY });
+    taskY += placed.height;
     shownTasks++;
   }
   if (!tasks.length) taskY += 36;
@@ -466,23 +520,29 @@ export function renderDashboardBmp(data, options = {}) {
       fillRect(x + 13, yy + 3, 15, 1);
     }
   }
-  function dailyBusyScale(blocks) {
+  function dailyBusyScale(intervals) {
     const bx = 226, by = DASHBOARD_LAYOUT.eventHeadingY + 17, bw = 270;
-    // Thin 24-hour scale within the original heading height.
+    const timeline = planBusyTimeline(intervals);
+    const span = timeline.end - timeline.start;
+    const atX = minute => bx + Math.round(bw * (minute - timeline.start) / span);
+    const label = minute => String(Math.floor(minute / 60)).padStart(2, '0');
     fillRect(bx, by, bw, 1);
-    for (const hour of [0, 6, 12, 18, 24])
-      fillRect(bx + Math.round(bw * hour / 24), by - 3, 1, 7);
-    for (const block of blocks) {
-      const start = Math.max(0, Math.min(1440, block.start));
-      const end = Math.max(0, Math.min(1440, block.end));
-      if (end <= start) continue;
-      const left = bx + Math.floor(bw * start / 1440);
-      const right = bx + Math.ceil(bw * end / 1440);
-      fillRect(left, by - 3, Math.max(2, right - left), 7);
+    for (const minute of timeline.ticks) {
+      const x = atX(minute);
+      fillRect(x, by - 3, 1, 7);
+      const text = label(minute);
+      const width = textWidth(text, faceFor(data, 'footer'));
+      const textX = Math.max(bx - 2, Math.min(bx + bw - width, x - width / 2));
+      write(text, textX, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', width + 2);
     }
-    write('00', bx - 2, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
-    write('12', bx + bw / 2 - 7, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
-    write('24', bx + bw - 14, DASHBOARD_LAYOUT.eventHeadingY - 3, 'footer', 24);
+    for (const block of timeline.blocks) {
+      const start = Math.max(timeline.start, block.start);
+      const end = Math.min(timeline.end, block.end);
+      if (end <= start) continue;
+      const x0 = Math.floor(atX(start));
+      const x1 = Math.ceil(atX(end));
+      fillRect(x0, by - 3, Math.max(2, x1 - x0), 7);
+    }
   }
   function rule(y) { fillRect(28, y, 472, 2); }
   function write(value, x, y, role, width = DASHBOARD_WIDTH - x - 25) {
