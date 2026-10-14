@@ -167,6 +167,104 @@ export function wrapDashboardText(value, face, maxWidth, maxLines = 2) {
   return out;
 }
 
+/**
+ * Adaptive, content-aware layout for the 528x792 X3. The fixed date/footer
+ * bars never move; the events/tasks boundary is calculated per dashboard.
+ *
+ * We reserve enough task space for all tasks when their content is short.
+ * If tasks overflow, reserve about half the usable agenda height for them.
+ * Events consume any space not needed by tasks. When events are short, tasks
+ * consume all the remaining space. Overflow counters are part of the fit
+ * calculation, so they are never silently clipped at the bottom.
+ */
+export const DASHBOARD_LAYOUT = Object.freeze({
+  dateRuleY: 87,
+  eventHeadingY: 104,
+  eventStartY: 141,
+  footerRuleY: 742,
+  contentBottomY: 734,
+  taskHeaderOffset: 19,
+  taskStartOffset: 40,
+  eventOverflowH: 27,
+  taskOverflowH: 27,
+});
+
+export function planDashboardLayout(data) {
+  const layout = DASHBOARD_LAYOUT;
+  const bodyFace = faceFor(data, 'body');
+  const durationFace = faceFor(data, 'heading');
+  const events = data.events.map(event => {
+    const duration = formatEventDuration(event.durationMinutes);
+    const durationWidth = duration ? Math.ceil(textWidth(duration, durationFace)) : 0;
+    const titleWidth = duration ? Math.max(126, 352 - durationWidth - 12) : 352;
+    const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
+    return { event, duration, durationWidth, titleWidth, lines,
+      height: Math.max(39, lines.length * 29 + 10) };
+  });
+  const tasks = data.tasks.map(task => {
+    const lines = wrapDashboardText(task.title, bodyFace, 440, 2);
+    return { task, lines, height: Math.max(39, lines.length * 28 + 9) };
+  });
+
+  const sectionOverhead = layout.taskHeaderOffset + layout.taskStartOffset;
+  const totalTaskHeight = tasks.length ? tasks.reduce((sum, row) => sum + row.height, 0) : 39;
+  // Reserve ~46% for tasks under mutual overflow, otherwise only as much as
+  // they actually need. The 27px "+N" row is reserved when tasks overflow.
+  const fairTaskBudget = Math.floor((layout.contentBottomY -
+    layout.eventStartY - sectionOverhead) * 0.46);
+  const taskReserve = Math.min(totalTaskHeight, fairTaskBudget) +
+    (totalTaskHeight > fairTaskBudget ? layout.taskOverflowH : 0);
+  const eventBottomLimit = layout.contentBottomY - sectionOverhead - taskReserve;
+
+  let eventY = layout.eventStartY, shownEvents = 0;
+  const eventPositions = [];
+  for (const row of events) {
+    const next = shownEvents + 1;
+    const needsCounter = next < events.length;
+    if (eventY + row.height + (needsCounter ? layout.eventOverflowH : 0) > eventBottomLimit) break;
+    eventPositions.push({ ...row, y: eventY });
+    eventY += row.height;
+    shownEvents++;
+  }
+  // Both empty sections still display one compact, clear placeholder.
+  if (!events.length) eventY += 39;
+  const eventsOverflow = events.length - shownEvents;
+  const eventsOverflowY = eventsOverflow ? eventY + 3 : null;
+  if (eventsOverflow) eventY += layout.eventOverflowH;
+
+  const taskHeadingY = eventY + layout.taskHeaderOffset;
+  const taskStartY = taskHeadingY + layout.taskStartOffset;
+  let taskY = taskStartY, shownTasks = 0;
+  const taskPositions = [];
+  for (const row of tasks) {
+    const next = shownTasks + 1;
+    const needsCounter = next < tasks.length;
+    if (taskY + row.height + (needsCounter ? layout.taskOverflowH : 0) > layout.contentBottomY) break;
+    taskPositions.push({ ...row, y: taskY });
+    taskY += row.height;
+    shownTasks++;
+  }
+  if (!tasks.length) taskY += 36;
+  const tasksOverflow = tasks.length - shownTasks;
+  const tasksOverflowY = tasksOverflow ? taskY + 2 : null;
+  if (tasksOverflow) taskY += layout.taskOverflowH;
+
+  // Notes are optional and lower priority than a real task or overflow count.
+  let note = null;
+  if (!tasksOverflow && data.note) {
+    const lines = wrapDashboardText(data.note, bodyFace, 470, 2);
+    const lastBottom = taskY + 47 + (lines.length - 1) * 28 + 26;
+    if (lastBottom <= layout.contentBottomY) note = { y: taskY, lines };
+  }
+  return {
+    events: eventPositions,
+    tasks: taskPositions,
+    shownEvents, shownTasks, eventsOverflow, tasksOverflow,
+    eventsOverflowY, tasksOverflowY,
+    eventBottomLimit, taskHeadingY, taskStartY, note,
+  };
+}
+
 export function renderDashboardBmp(data) {
   const bytes = bitmap();
   const ru = data.locale === 'ru';
@@ -204,29 +302,18 @@ export function renderDashboardBmp(data) {
       pen += advance;
     }
   }
-  const bodyFace = faceFor(data, 'body');
-  // Keep the date formatted exactly as provided by the Shortcut.
+  const layout = planDashboardLayout(data);
+  // The date and footer are fixed anchors; everything between adapts.
   write(data.date, 28, 24, 'date', 472);
-  rule(107);
+  rule(DASHBOARD_LAYOUT.dateRuleY);
 
-  write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, 126, 'heading');
-  let eventY = 166, shownEvents = 0;
-  for (const event of data.events.slice(0, 6)) {
-    // Reserve a right-aligned column for duration. The title wraps before it,
-    // never over it, even in Cyrillic and for longer labels like (1H 30M).
-    const duration = formatEventDuration(event.durationMinutes);
-    const durationFace = faceFor(data, 'heading');
-    const badgeWidth = duration ? Math.ceil(textWidth(duration, durationFace)) : 0;
-    const titleWidth = duration ? Math.max(126, 352 - badgeWidth - 12) : 352;
-    const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
-    const rowH = Math.max(39, lines.length * 29 + 10);
-    if (eventY + rowH > 486 && shownEvents > 0) break;
-    // P/F/S/W shares the same 19px badge slot previously used by F.
-    // It occupies the existing gap; event title always begins at x=146.
+  write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, DASHBOARD_LAYOUT.eventHeadingY, 'heading');
+  for (const row of layout.events) {
+    const { event, y, lines, titleWidth, duration, durationWidth } = row;
     const badge = DASHBOARD_CALENDAR_CATEGORIES[event.calendar] || '';
-    write(event.time, 30, eventY + 1, 'time', badge ? 86 : 108);
+    write(event.time, 30, y + 1, 'time', badge ? 86 : 108);
     if (badge) {
-      const bx = 119, by = eventY + 8, size = 19;
+      const bx = 119, by = y + 8, size = 19;
       fillRect(bx, by, size, 1);
       fillRect(bx, by + size - 1, size, 1);
       fillRect(bx, by, 1, size);
@@ -235,56 +322,44 @@ export function renderDashboardBmp(data) {
       const glyphWidth = textWidth(badge, face);
       write(badge, bx + Math.floor((size - glyphWidth) / 2), by + 2, 'footer', size - 4);
     }
-    lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', titleWidth));
-    if (duration) write(duration, 500 - badgeWidth, eventY + 3, 'heading', badgeWidth + 1);
-    eventY += rowH;
-    shownEvents++;
+    lines.forEach((line, i) => write(line, 146, y + i * 29, 'body', titleWidth));
+    if (duration) write(duration, 500 - durationWidth, y + 3, 'heading', durationWidth + 1);
   }
   if (!data.events.length) {
-    write(ru ? 'Нет событий' : 'No events', 30, eventY, 'body');
-    eventY += 41;
+    write(ru ? 'Нет событий' : 'No events', 30, DASHBOARD_LAYOUT.eventStartY, 'body');
   }
-  if (shownEvents < data.events.length) {
-    write('+' + (data.events.length - shownEvents) + (ru ? ' ещё' : ' more'), 146, Math.min(489, eventY + 3), 'heading');
-    eventY += 28;
+  if (layout.eventsOverflow) {
+    write('+' + layout.eventsOverflow + (ru ? ' ещё' : ' more'), 146,
+      layout.eventsOverflowY, 'heading');
   }
 
-  const taskHeaderY = Math.min(541, Math.max(306, eventY + 22));
-  rule(taskHeaderY - 17);
-  write(ru ? 'ЗАДАЧИ' : 'TASKS', 28, taskHeaderY, 'heading');
-  let taskY = taskHeaderY + 40, shownTasks = 0;
-  const tasks = data.tasks.slice(0, 5);
-  for (const task of tasks) {
-    const lines = wrapDashboardText(task.title, bodyFace, 440, 2);
-    const rowH = Math.max(39, lines.length * 28 + 9);
-    if (taskY + rowH > 708) break;
-    // Completed: filled square, pending: outlined square.
-    if (task.done) fillRect(30, taskY + 7, 14, 14);
+  rule(layout.taskHeadingY - 17);
+  write(ru ? 'ЗАДАЧИ' : 'TASKS', 28, layout.taskHeadingY, 'heading');
+  for (const row of layout.tasks) {
+    const { task, y, lines } = row;
+    if (task.done) fillRect(30, y + 7, 14, 14);
     else {
-      fillRect(30, taskY + 7, 14, 2);
-      fillRect(30, taskY + 19, 14, 2);
-      fillRect(30, taskY + 7, 2, 14);
-      fillRect(42, taskY + 7, 2, 14);
+      fillRect(30, y + 7, 14, 2);
+      fillRect(30, y + 19, 14, 2);
+      fillRect(30, y + 7, 2, 14);
+      fillRect(42, y + 7, 2, 14);
     }
-    lines.forEach((line, i) => write(line, 58, taskY + i * 28, 'body', 440));
-    taskY += rowH;
-    shownTasks++;
+    lines.forEach((line, i) => write(line, 58, y + i * 28, 'body', 440));
   }
-  if (!tasks.length) {
-    write(ru ? 'Нет задач' : 'No tasks', 30, taskY, 'body');
-    taskY += 36;
+  if (!data.tasks.length) {
+    write(ru ? 'Нет задач' : 'No tasks', 30, layout.taskStartY, 'body');
   }
-  if (shownTasks < data.tasks.length && taskY < 711) {
-    write('+' + (data.tasks.length - shownTasks) + (ru ? ' ещё' : ' more'), 58, taskY, 'heading');
-    taskY += 27;
+  if (layout.tasksOverflow) {
+    write('+' + layout.tasksOverflow + (ru ? ' ещё' : ' more'),
+      58, layout.tasksOverflowY, 'heading');
   }
-  if (data.note && taskY < 655) {
-    rule(taskY + 5);
-    write(ru ? 'ЗАМЕТКА' : 'NOTE', 28, taskY + 19, 'heading');
-    wrapDashboardText(data.note, bodyFace, 470, 2)
-      .forEach((line, i) => write(line, 28, taskY + 47 + i * 28, 'body', 470));
+  if (layout.note) {
+    rule(layout.note.y + 5);
+    write(ru ? 'ЗАМЕТКА' : 'NOTE', 28, layout.note.y + 19, 'heading');
+    layout.note.lines.forEach((line, i) => write(line, 28,
+      layout.note.y + 47 + i * 28, 'body', 470));
   }
-  rule(742);
+  rule(DASHBOARD_LAYOUT.footerRuleY);
   write((ru ? 'Обновлено ' : 'Updated ') + (data.updated || data.generatedAt.slice(11, 16) + ' UTC'),
     28, 757, 'footer', 278);
   write('X3 / POCKET LIBRARY', 361, 757, 'footer', 140);
