@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import app from '../src/index.js';
-import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText } from '../src/dashboard.js';
+import { DASHBOARD_WIDTH, DASHBOARD_HEIGHT, normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit, DEFAULT_DASHBOARD_FONT, DASHBOARD_FONTS, normalizeDashboardFont, wrapDashboardText, normalizeDurationMinutes, formatEventDuration } from '../src/dashboard.js';
 
 class MemoryR2 {
   constructor() { this.objects = new Map(); }
@@ -61,6 +61,48 @@ test('each true font can render Cyrillic and long wrapped events without changin
     images.push(createHash('sha256').update(bytes).digest('hex'));
   }
   assert.equal(new Set(images).size, 4);
+});
+
+
+test('duration minutes format compactly and normalize existing + new event records', () => {
+  assert.equal(formatEventDuration(), '');
+  assert.equal(formatEventDuration(0), '');
+  assert.equal(formatEventDuration(15), '(15M)');
+  assert.equal(formatEventDuration(30), '(30M)');
+  assert.equal(formatEventDuration(60), '(1H)');
+  assert.equal(formatEventDuration(75), '(1H 15M)');
+  assert.equal(formatEventDuration(90), '(1H 30M)');
+  assert.equal(formatEventDuration(120), '(2H)');
+  assert.equal(formatEventDuration(135), '(2H 15M)');
+  assert.equal(normalizeDurationMinutes('90'), 90);
+  assert.equal(normalizeDurationMinutes(null), null);
+  assert.equal(normalizeDashboard(example).events[0].durationMinutes, undefined);
+  assert.equal(normalizeDashboard({
+    ...example,
+    events: [{ time: '14:30', title: 'Забрать детей', durationMinutes: 45 }]
+  }).events[0].durationMinutes, 45);
+  for (const bad of [-1, 10081, 1.5, '1H', {}, true, NaN, Infinity]) {
+    assert.throws(() => normalizeDurationMinutes(bad), /durationMinutes/);
+  }
+});
+
+test('duration badges change both BMP versions with no change to date or unsupported fonts', () => {
+  for (const font of DASHBOARD_FONTS) {
+    const normal = normalizeDashboard({ ...example, font });
+    const withDuration = normalizeDashboard({
+      ...example, font,
+      events: normal.events.map((event, i) => ({
+        ...event, durationMinutes: i ? 90 : 30
+      }))
+    });
+    const plain = renderDashboardBmp(normal);
+    const badged = renderDashboardBmp(withDuration);
+    assert.notEqual(createHash('sha256').update(plain).digest('hex'),
+      createHash('sha256').update(badged).digest('hex'));
+    const oneBit = convertDashboardBmpTo1Bit(badged);
+    assert.ok(oneBit.length < 1024 * 1024);
+    assert.equal(new DataView(oneBit.buffer).getUint16(28, true), 1);
+  }
 });
 
 test('dashboard schema validation and Unicode', () => {
