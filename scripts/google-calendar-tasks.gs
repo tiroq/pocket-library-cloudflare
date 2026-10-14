@@ -31,10 +31,8 @@ function syncX3Dashboard() {
   const timezone = Session.getScriptTimeZone();
   const now = new Date();
   const dateKey = Utilities.formatDate(now, timezone, 'yyyy-MM-dd');
-  // Compute local calendar day via date-only formatting, not UTC midnight.
-  const todayStart = new Date(Utilities.formatDate(now, timezone, 'yyyy/MM/dd') + ' 00:00:00');
-  const tomorrow = new Date(todayStart.getTime());
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // CalendarApp resolves the day's boundaries in the selected calendar's
+  // own timezone, avoiding ambiguous parsing of timezone-less date strings.
 
   const calendarIds = String(properties.getProperty('CALENDAR_IDS') || '').split(',')
     .map(id => id.trim()).filter(Boolean);
@@ -44,7 +42,7 @@ function syncX3Dashboard() {
 
   const events = [];
   calendars.forEach(calendar => {
-    calendar.getEvents(todayStart, tomorrow).forEach(event => {
+    calendar.getEventsForDay(now).forEach(event => {
       if (!event.getTitle()) return;
       const allDay = event.isAllDayEvent();
       const start = event.getStartTime();
