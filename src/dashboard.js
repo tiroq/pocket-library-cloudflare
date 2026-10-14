@@ -3,6 +3,7 @@ import { FONT_ATLASES } from './generated/dashboard-font-atlases.js';
 export const DASHBOARD_WIDTH = 528;
 export const DEFAULT_DASHBOARD_FONT = 'golos-text';
 export const DASHBOARD_FONTS = Object.freeze(['golos-text', 'inter', 'ibm-plex-sans', 'onest']);
+export const DASHBOARD_CALENDAR_CATEGORIES = Object.freeze({ personal: 'P', family: 'F', shared: 'S', work: 'W' });
 export function normalizeDashboardFont(value) {
   if (value === undefined || value === null || value === '') return DEFAULT_DASHBOARD_FONT;
   if (typeof value !== 'string') throw new Error('font must be a string');
@@ -52,13 +53,13 @@ export function normalizeDashboard(raw) {
   const events = raw.events.map(e => {
     if (!e || typeof e !== 'object' || Array.isArray(e)) throw new Error('Invalid event');
     const durationMinutes = normalizeDurationMinutes(e.durationMinutes);
-    if (e.calendar != null && e.calendar !== '' &&
-        e.calendar !== 'family' && e.calendar !== 'primary') {
-      throw new Error('calendar must be primary or family');
+    if (e.calendar != null && e.calendar !== '' && e.calendar !== 'primary' &&
+        !Object.hasOwn(DASHBOARD_CALENDAR_CATEGORIES, e.calendar)) {
+      throw new Error('calendar must be personal, family, shared, work or primary');
     }
     return { time: clean(e.time ?? '', 20), title: clean(e.title, 120),
       ...(durationMinutes === null ? {} : { durationMinutes }),
-      ...(e.calendar === 'family' ? { calendar: 'family' } : {}) };
+      ...(Object.hasOwn(DASHBOARD_CALENDAR_CATEGORIES, e.calendar) ? { calendar: e.calendar } : {}) };
   }).filter(e => e.title);
   const tasks = raw.tasks.map(t => {
     if (typeof t === 'string') return { title: clean(t, 120), done: false };
@@ -220,17 +221,19 @@ export function renderDashboardBmp(data) {
     const lines = wrapDashboardText(event.title, bodyFace, titleWidth, 2);
     const rowH = Math.max(39, lines.length * 29 + 10);
     if (eventY + rowH > 486 && shownEvents > 0) break;
-    // Family badge occupies the existing 34px gap between the time and the
-    // event title; title x=146 and duration column remain unchanged.
-    // Limit family time to the left side of the gap to prevent any collision.
-    write(event.time, 30, eventY + 1, 'time', event.calendar === 'family' ? 86 : 108);
-    if (event.calendar === 'family') {
+    // P/F/S/W shares the same 19px badge slot previously used by F.
+    // It occupies the existing gap; event title always begins at x=146.
+    const badge = DASHBOARD_CALENDAR_CATEGORIES[event.calendar] || '';
+    write(event.time, 30, eventY + 1, 'time', badge ? 86 : 108);
+    if (badge) {
       const bx = 119, by = eventY + 8, size = 19;
       fillRect(bx, by, size, 1);
       fillRect(bx, by + size - 1, size, 1);
       fillRect(bx, by, 1, size);
       fillRect(bx + size - 1, by, 1, size);
-      write('F', bx + 6, by + 2, 'footer', size - 8);
+      const face = faceFor(data, 'footer');
+      const glyphWidth = textWidth(badge, face);
+      write(badge, bx + Math.floor((size - glyphWidth) / 2), by + 2, 'footer', size - 4);
     }
     lines.forEach((line, i) => write(line, 146, eventY + i * 29, 'body', titleWidth));
     if (duration) write(duration, 500 - badgeWidth, eventY + 3, 'heading', badgeWidth + 1);
