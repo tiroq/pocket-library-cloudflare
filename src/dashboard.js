@@ -64,10 +64,12 @@ export function normalizeDashboard(raw) {
   const tasks = raw.tasks.map(t => {
     if (typeof t === 'string') return { title: clean(t, 120), done: false };
     if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('Invalid task');
-    return { title: clean(t.title, 120), done: t.done === true };
+    return { title: clean(t.title, 120), done: t.done === true,
+      ...(t.overdue === true ? { overdue: true } : {}) };
   }).filter(t => t.title);
   return {
     date,
+    weather: clean(raw.weather ?? '', 42),
     font: normalizeDashboardFont(raw.font),
     locale: raw.locale === 'ru' ? 'ru' : 'en',
     events,
@@ -265,7 +267,7 @@ export function planDashboardLayout(data) {
   };
 }
 
-export function renderDashboardBmp(data) {
+export function renderDashboardBmp(data, options = {}) {
   const bytes = bitmap();
   const ru = data.locale === 'ru';
   function fillRect(x, y, width, height) {
@@ -304,7 +306,14 @@ export function renderDashboardBmp(data) {
   }
   const layout = planDashboardLayout(data);
   // The date and footer are fixed anchors; everything between adapts.
-  write(data.date, 28, 24, 'date', 472);
+  const weather = data.weather || '';
+  const weatherFace = faceFor(data, 'heading');
+  const weatherWidth = weather ? Math.ceil(textWidth(weather, weatherFace)) : 0;
+  const dateWidth = weather ? Math.max(225, 472 - weatherWidth - 14) : 472;
+  write(data.date, 28, 24, 'date', dateWidth);
+  if (weather) {
+    write(weather, 500 - weatherWidth, 45, 'heading', weatherWidth + 1);
+  }
   rule(DASHBOARD_LAYOUT.dateRuleY);
 
   write(ru ? 'СОБЫТИЯ' : 'EVENTS', 28, DASHBOARD_LAYOUT.eventHeadingY, 'heading');
@@ -343,6 +352,7 @@ export function renderDashboardBmp(data) {
       fillRect(30, y + 19, 14, 2);
       fillRect(30, y + 7, 2, 14);
       fillRect(42, y + 7, 2, 14);
+      if (task.overdue) write('!', 34, y + 5, 'footer', 8);
     }
     lines.forEach((line, i) => write(line, 58, y + i * 28, 'body', 440));
   }
@@ -361,7 +371,13 @@ export function renderDashboardBmp(data) {
   }
   rule(DASHBOARD_LAYOUT.footerRuleY);
   write((ru ? 'Обновлено ' : 'Updated ') + (data.updated || data.generatedAt.slice(11, 16) + ' UTC'),
-    28, 757, 'footer', 278);
+    28, 757, 'footer', options.stale ? 162 : 278);
+  if (options.stale) {
+    // A warning means *no recent successful upload*, not a diagnosed error.
+    // Only a fresh BMP fetch to X3 can display a changed static image.
+    const mins = Number.isFinite(options.staleMinutes) ? Math.round(options.staleMinutes) : 45;
+    write((ru ? '! СИНХР. >' : '! STALE >') + mins + 'M', 187, 757, 'footer', 168);
+  }
   write('X3 / POCKET LIBRARY', 361, 757, 'footer', 140);
   return bytes;
 }
