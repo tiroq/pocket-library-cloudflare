@@ -103,6 +103,58 @@ send `"tasks": []` after Apps Script does its upload, it will clear
 tasks again. Disable the old iPhone automation when you enable the
 Apps Script trigger.
 
+## Shared Family calendar and the tiny F marker
+
+The script can now merge events from the **primary Google Calendar** and a
+**shared Family calendar** without moving existing dashboard text. Family
+events get an optional `"calendar": "family"` property. The Worker draws
+a subtle **19×19 px outlined F** in the existing space between the time and
+event title. Title x-position, date, duration badge and font sizes are unchanged.
+Primary events stay unmarked.
+
+**Set up your shared calendar:**
+
+1. Check that the shared Family calendar is **visible to the Google account**
+   running the Apps Script, with permission to see event details.
+2. Open Google Calendar on the web → Settings → find the **Family** calendar
+   under your calendars or other calendars → **Integrate calendar** →
+   copy **Calendar ID** (not the display name). Alternatively, paste the
+   updated Apps Script and run `listX3CalendarIds` once in your private
+   project. Its **Execution log** lists calendar names and exact IDs,
+   without exposing any event titles or tokens.
+3. In **Apps Script → Project Settings → Script Properties**, add
+   `FAMILY_CALENDAR_ID` with this complete calendar ID.
+4. Paste the latest `scripts/google-calendar-tasks.gs` into `Code.gs`,
+   save it, then run `syncX3Dashboard`. You should now see events from
+   both calendars, marked `F` for the family events.
+5. Existing time-driven triggers keep using the same function; there is no
+   need for a second trigger.
+
+`FAMILY_CALENDAR_ID` automatically **adds** the shared calendar to the
+default primary calendar. If you already use `CALENDAR_IDS`, the family
+calendar is added to that selected list instead, with duplicate IDs removed.
+An inaccessible family calendar fails with a clear error instead of silently
+dropping its events. Do **not** add real calendar IDs to public GitHub source.
+
+**Manual JSON clients** (including iPhone Shortcuts) can also use
+`"calendar": "family"` for family events. Omit that key for primary events.
+The Worker accepts `"calendar": "primary"` as an explicit unmarked event;
+unknown tags cause HTTP 400.
+
+Example:
+
+```json
+{
+  "events": [
+    {"time":"09:00","title":"Работа","durationMinutes":60},
+    {"time":"16:00","title":"Забрать детей","durationMinutes":30,"calendar":"family"}
+  ]
+}
+```
+
+The snippet shows only the `events` portion of a normal dashboard POST.
+All four supported font families and both BMP formats use the same marker.
+
 ### If you prefer the current Shortcut
 
 You may manually add dictionaries inside its `tasks` Array. But that
