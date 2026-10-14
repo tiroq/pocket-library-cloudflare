@@ -100,6 +100,18 @@ and `CALENDAR_IDS` continue working when `CALENDAR_SOURCES` is unset.
 
 See **[multiple calendar setup](docs/calendar-sources.md)**.
 
+## Final compact calendar header and cached hourly forecast
+
+The 528×792 X3 displays the day **once inside a calendar icon**, with the
+weekday and month beside it (no visible year). Three monochrome hourly
+weather icons/temperatures are shown for **08, 14, 20**. Google Apps Script
+stores the latest successful **today + tomorrow** forecast in Script
+Properties so intermittent Open-Meteo failures reuse a correct-day cache;
+after 20:00 local time `WEATHER_MODE=auto` switches to tomorrow's weather
+with an explicit `ЗАВТРА` label. `WEATHER_MODE=today` disables switching.
+No device firmware changes; needs updated Worker + Apps Script.
+See [setup](docs/calendar-dashboard.md#context-aware-dashboard-weekday-weather-remaining-events-and-task-urgency).
+
 ## Context-aware X3 calendar and freshness
 
 The calendar header can show the weekday and a tiny weather report, events
