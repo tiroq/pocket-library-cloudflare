@@ -1,6 +1,7 @@
 import { extractEpub } from './epub.js';
 import { bookRecord, renderHome, renderOpds } from './catalog.js';
 import { normalizeDashboard, renderDashboardBmp, convertDashboardBmpTo1Bit } from './dashboard.js';
+import { buildDemoDashboardPayload } from './demo-dashboard.js';
 
 const MAX_EPUB = 12 * 1024 * 1024; // Conservative: free Workers have tight CPU/memory limits.
 const NO_STORE = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -89,6 +90,29 @@ async function updateDashboard(req, env) {
   return jsonResponse({ ok: true, imageUrl: '/dashboard.bmp', sleepImageUrl: '/dashboard-1bit.bmp', width: 528, height: 792,
     updatedAt: data.generatedAt, font: data.font, events: data.events.length, tasks: data.tasks.length });
 }
+/**
+ * Demo assets are isolated under dashboard/demo*. No Calendar/Tasks access,
+ * no live weather lookup and no writes to dashboard/current.*.
+ * Authenticated POST explicitly refreshes the saved snapshot. Readers use
+ * stable Basic-protected BMP links in CrossPoint, exactly like production.
+ */
+async function updateDemoDashboard(req, env) {
+  if (!uploaderOK(req, env)) return unauthorizedUploader();
+  const data = normalizeDashboard(buildDemoDashboardPayload());
+  const bitmap = renderDashboardBmp(data, { demo: true });
+  const mono = convertDashboardBmpTo1Bit(bitmap);
+  const type = { httpMetadata: { contentType: 'image/bmp' } };
+  await env.BOOKS_BUCKET.put('dashboard/demo.bmp', bitmap, type);
+  await env.BOOKS_BUCKET.put('dashboard/demo-1bit.bmp', mono, type);
+  await env.BOOKS_BUCKET.put('dashboard/demo.json', JSON.stringify(data),
+    { httpMetadata: { contentType: 'application/json' } });
+  return jsonResponse({
+    ok: true, demo: true, weather: 'synthetic',
+    imageUrl: '/dashboard/demo.bmp', sleepImageUrl: '/dashboard/demo-1bit.bmp',
+    width: 528, height: 792, updatedAt: data.generatedAt,
+    localTime: data.updated, events: data.events.length, tasks: data.tasks.length
+  });
+}
 // Cron marks a *previously uploaded image* stale even when Google Apps Script
 // fails and therefore never sends a fresh payload. It cannot repaint a sleeping
 // X3 until the device downloads this newer image.
@@ -120,10 +144,11 @@ export async function refreshDashboardFreshness(env, now = new Date()) {
   return true;
 }
 
-async function sendDashboard(req, env, format = 'json') {
+async function sendDashboard(req, env, format = 'json', demo = false) {
   const image = format !== 'json';
-  const key = format === 'mono' ? 'dashboard/current-1bit.bmp'
-    : image ? 'dashboard/current.bmp' : 'dashboard/current.json';
+  const name = demo ? 'demo' : 'current';
+  const key = format === 'mono' ? `dashboard/${name}-1bit.bmp`
+    : image ? `dashboard/${name}.bmp` : `dashboard/${name}.json`;
   const obj = req.method === 'HEAD' ? await env.BOOKS_BUCKET.head(key) : await env.BOOKS_BUCKET.get(key);
   if (!obj) return textResponse('Dashboard has not been uploaded yet', 404);
   const headers = new Headers(NO_STORE);
@@ -159,12 +184,16 @@ export default {
       if (!env.BOOKS_BUCKET || !env.READ_PASSWORD || !env.UPLOAD_TOKEN) return textResponse('Worker is not fully configured', 503);
       if (url.pathname === '/api/books' && req.method === 'POST') return await upload(req, env);
       if (url.pathname === '/api/dashboard' && req.method === 'POST') return await updateDashboard(req, env);
+      if (url.pathname === '/api/dashboard/demo' && req.method === 'POST') return await updateDemoDashboard(req, env);
       const matchDelete = url.pathname.match(new RegExp(`^/api/books/(${ID})$`));
       if (matchDelete && req.method === 'DELETE') return await deleteBook(req, env, matchDelete[1]);
       if (!basicOK(req, env)) return unauthorizedReader();
       if (req.method !== 'GET' && req.method !== 'HEAD') return textResponse('Method not allowed', 405);
       if (url.pathname === '/dashboard.bmp') return await sendDashboard(req, env, 'color');
       if (url.pathname === '/dashboard-1bit.bmp') return await sendDashboard(req, env, 'mono');
+      if (url.pathname === '/dashboard/demo.bmp') return await sendDashboard(req, env, 'color', true);
+      if (url.pathname === '/dashboard/demo-1bit.bmp') return await sendDashboard(req, env, 'mono', true);
+      if (url.pathname === '/api/dashboard/demo') return await sendDashboard(req, env, 'json', true);
       if (url.pathname === '/api/dashboard') return await sendDashboard(req, env);
       if (url.pathname === '/' || url.pathname === '/opds.xml') {
         const cursor = url.searchParams.get('cursor') || '';
