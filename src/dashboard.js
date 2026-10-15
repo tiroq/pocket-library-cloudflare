@@ -698,6 +698,12 @@ export function renderDashboardBmp(data, options = {}) {
     // Only a fresh BMP fetch to X3 can display a changed static image.
     const mins = Number.isFinite(options.staleMinutes) ? Math.round(options.staleMinutes) : 45;
     write((ru ? '! СИНХР. >' : '! STALE >') + mins + 'M', 187, 757, 'footer', 168);
+  } else if (options.demo === true) {
+    // Option-only marker: real dashboard uploads can never enable demo mode.
+    const demoLabel = 'DEMO MODE';
+    const face = faceFor(data, 'footer');
+    write(demoLabel, 270 - Math.round(textWidth(demoLabel, face) / 2),
+      757, 'footer', 110);
   }
   write('X3 / POCKET LIBRARY', 361, 757, 'footer', 140);
   return bytes;
