@@ -15,7 +15,7 @@ This repository (`tiroq/pocket-library-cloudflare`) is the **canonical public up
 
 The dependency direction is **Private Cloud → Public Core**, never the reverse. A change to the renderer, parser or OPDS serialization must land in the public repository first, and Cloud must adopt a versioned reference. No copying private source files into the public project.
 
-**Current migration status:** A complete Git-history import of this public repository into the new private repository is a one-time bootstrap. Until it is verified, the private Cloud roadmap is documentation-only; do not regard an unrelated file-copy snapshot as a history-preserving migration.
+**Git migration status (2026-10-15): COMPLETE.** The private Cloud imported 19 commits and feature branches via authenticated SSH; both repositories shared `main` SHA `bee080a1ea079d4b67d991d098bd457eb1cad44d` at the import boundary. Subsequent commits will diverge legitimately; Cloud should pin a released core library rather than mirror source.
 
 ## Extraction plan
 
@@ -31,7 +31,8 @@ The Free/Premium **hosted account tiers** (such as a configurable 10/day image r
 
 ## Safety
 
-- Source `wrangler.jsonc` currently names a real personal domain and R2 bucket; **do not deploy an imported copy** without deliberately replacing those bindings.
+- This public repo currently powers the owner's personal `books.tiroq.dev` Worker. **The intended future production domain for private Cloud is ALSO `books.tiroq.dev`**, with the owner's original content migrated to a `superadmin` tenant and existing X3 URLs kept compatible. It is one eventual Cloud service, not two simultaneously competing custom-domain owners. The transition is tracked privately; public core may later cease to own the live deployment.
+- Source `wrangler.jsonc` currently names the personal production domain and R2 bucket; **do not deploy imported private copies** without a reviewed migration of that domain and those objects.
 - Existing tokens remain private Worker Secrets; never add credentials or user content to source or fixtures.
 - No automatic production release is implied by changes to these repositories.
 
