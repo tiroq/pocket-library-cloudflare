@@ -188,6 +188,51 @@ See **[docs/calendar-dashboard.md](docs/calendar-dashboard.md)** for a working J
 
 For **automatic Custom sleep-screen refresh** on supported CrossPoint develop firmware, the Worker also exposes a compact **1-bit** BMP at `/dashboard-1bit.bmp` (read-only Basic auth). See the bundled [X3 Calendar SD plugin](plugins/x3-calendar/README.md) and [setup instructions](docs/calendar-dashboard.md#automatic-sleep-image-download-with-crosspoint-sd-plugin-events). Stable CrossPoint **1.6.5 does not support `sleep.enter`**.
 
+## Synthetic X3 demo screen (no personal data)
+
+Refresh a **separate private** demo dashboard for showing colleagues the
+XTEINK X3 calendar layout. Everything in this demo is fictional: meetings,
+task titles, overdue counts and weather forecasts. The left calendar and
+footer show the actual current date/time in **Asia/Bangkok** when you generate
+a demo, and the footer explicitly says **DEMO MODE**. Weather has three
+illustrative 08/14/20 readings and automatically switches to a labeled
+tomorrow view after 20:00 Thailand time. It **does not call Open-Meteo**,
+Google Calendar, or Google Tasks.
+
+Generate/refresh a snapshot using your existing **upload** token:
+
+```sh
+curl -fS -X POST \
+  -H "Authorization: Bearer $UPLOAD_TOKEN" \
+  https://books.tiroq.dev/api/dashboard/demo
+```
+
+Download the compact 1-bit BMP using the existing **reader** password
+and upload the resulting file as `/sleep.bmp` on X3:
+
+```sh
+curl -fS -u "reader:$READ_PASSWORD" \
+  -o sleep.bmp https://books.tiroq.dev/dashboard/demo-1bit.bmp
+```
+
+| Protected URL | Content |
+|---|---|
+| `GET /dashboard/demo-1bit.bmp` | 528×792 1-bit BMP, 53,918 bytes |
+| `GET /dashboard/demo.bmp` | 528×792 24-bit BMP, 1,254,582 bytes |
+| `GET /api/dashboard/demo` | Most recently generated synthetic JSON |
+| `POST /api/dashboard/demo` | Generate a new snapshot; upload bearer token required |
+
+All GET routes require the same HTTP Basic credentials as the private
+production dashboard, and `HEAD` is supported for the BMPs. The first GET
+will return 404 until the first authenticated POST creates the demo images.
+
+Demo objects are stored exclusively at `dashboard/demo*.bmp` and
+`dashboard/demo.json`, never `dashboard/current*`: demo generation cannot
+replace real calendar or task data. The production 15-minute Google Apps
+Script sync and stale-data Cron remain independent. Demo images are
+**snapshots**, not continuously changing pictures: refresh the POST when
+you want a new timestamp, then download again on the reader.
+
 ## CrossPoint X3
 
 `Settings → System → OPDS Servers → Add Server`
